@@ -3,18 +3,20 @@
 #![cfg(test)]
 
 use frame_support::{
-	construct_runtime,
-	traits::{ConstU32, ConstU64, Everything},
+    construct_runtime,
+    parameter_types,
+    traits::{ConstU32, ConstU64, Everything},
 };
 use sp_core::H256;
 use sp_runtime::{testing::Header, traits::IdentityLookup};
 
-use super::*;
-
 use crate as nft;
+
+use super::*;
 
 pub type AccountId = u128;
 pub type BlockNumber = u64;
+pub type Balance = u128;
 
 impl frame_system::Config for Runtime {
 	type RuntimeOrigin = RuntimeOrigin;
@@ -43,13 +45,30 @@ impl frame_system::Config for Runtime {
 	type MaxConsumers = ConstU32<16>;
 }
 
+parameter_types! {
+	pub const ExistentialDeposit: u64 = 1;
+}
+
+impl pallet_balances::Config for Runtime {
+    type Balance = Balance;
+    type DustRemoval = ();
+    type Event = Event;
+    type ExistentialDeposit = ExistentialDeposit;
+    type AccountStore = frame_system::Pallet<Runtime>;
+    type MaxLocks = ();
+    type MaxReserves = ();
+    type ReserveIdentifier = ();
+    type WeightInfo = ();
+}
+
 impl Config for Runtime {
-	type ClassId = u64;
-	type TokenId = u64;
-	type ClassData = ();
-	type TokenData = ();
-	type MaxClassMetadata = ConstU32<1>;
-	type MaxTokenMetadata = ConstU32<1>;
+    type ClassId = u64;
+    type TokenId = u64;
+    type ClassData = ();
+    type TokenData = ();
+    type MaxClassMetadata = ConstU32<1>;
+    type MaxTokenMetadata = ConstU32<1>;
+    type Currency = PalletBalances;
 }
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Runtime>;
@@ -62,6 +81,7 @@ construct_runtime!(
 		UncheckedExtrinsic = UncheckedExtrinsic,
 	{
 		System: frame_system::{Pallet, Call, Storage, Config, Event<T>},
+		PalletBalances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
 		NonFungibleTokenModule: nft::{Pallet, Storage, Config<T>},
 	}
 );
@@ -76,19 +96,19 @@ pub const TOKEN_ID_NOT_EXIST: <Runtime as Config>::TokenId = 100;
 pub struct ExtBuilder;
 
 impl Default for ExtBuilder {
-	fn default() -> Self {
-		ExtBuilder
-	}
+    fn default() -> Self {
+        ExtBuilder
+    }
 }
 
 impl ExtBuilder {
-	pub fn build(self) -> sp_io::TestExternalities {
-		let t = frame_system::GenesisConfig::default()
-			.build_storage::<Runtime>()
-			.unwrap();
+    pub fn build(self) -> sp_io::TestExternalities {
+        let t = frame_system::GenesisConfig::default()
+            .build_storage::<Runtime>()
+            .unwrap();
 
-		let mut ext = sp_io::TestExternalities::new(t);
-		ext.execute_with(|| System::set_block_number(1));
-		ext
-	}
+        let mut ext = sp_io::TestExternalities::new(t);
+        ext.execute_with(|| System::set_block_number(1));
+        ext
+    }
 }
