@@ -96,6 +96,10 @@ pub mod module {
 		/// Maximum size of HasDispatched
 		#[pallet::constant]
 		type MaxHasDispatchedSize: Get<u32>;
+
+		/// Maximum size the vector used for feed values
+		#[pallet::constant]
+		type MaxFeedValues: Get<u32>;
 	}
 
 	#[pallet::error]
@@ -134,7 +138,6 @@ pub mod module {
 		StorageValue<_, OrderedSet<T::AccountId, T::MaxHasDispatchedSize>, ValueQuery>;
 
 	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T, I = ()>(PhantomData<(T, I)>);
 
 	#[pallet::hooks]
@@ -159,12 +162,21 @@ pub mod module {
 		#[pallet::weight(T::WeightInfo::feed_values(values.len() as u32))]
 		pub fn feed_values(
 			origin: OriginFor<T>,
-			values: Vec<(T::OracleKey, T::OracleValue)>,
+			values: BoundedVec<(T::OracleKey, T::OracleValue), T::MaxFeedValues>,
 		) -> DispatchResultWithPostInfo {
 			let feeder = ensure_signed(origin.clone())
 				.map(Some)
 				.or_else(|_| ensure_root(origin).map(|_| None))?;
-			Self::do_feed_values(feeder, values)?;
+
+			let who = Self::ensure_account(feeder)?;
+
+			// ensure account hasn't dispatched an updated yet
+			ensure!(
+				HasDispatched::<T, I>::mutate(|set| set.insert(who.clone())),
+				Error::<T, I>::AlreadyFeeded
+			);
+
+			Self::do_feed_values(who, values.into())?;
 			Ok(Pays::No.into())
 		}
 	}
@@ -194,21 +206,17 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
 		T::CombineData::combine_data(key, values, Self::values(key))
 	}
 
-	fn do_feed_values(who: Option<T::AccountId>, values: Vec<(T::OracleKey, T::OracleValue)>) -> DispatchResult {
+	fn ensure_account(who: Option<T::AccountId>) -> Result<T::AccountId, DispatchError> {
 		// ensure feeder is authorized
-		let who = if let Some(who) = who {
+		if let Some(who) = who {
 			ensure!(T::Members::contains(&who), Error::<T, I>::NoPermission);
-			who
+			Ok(who)
 		} else {
-			T::RootOperatorAccountId::get()
-		};
+			Ok(T::RootOperatorAccountId::get())
+		}
+	}
 
-		// ensure account hasn't dispatched an updated yet
-		ensure!(
-			HasDispatched::<T, I>::mutate(|set| set.insert(who.clone())),
-			Error::<T, I>::AlreadyFeeded
-		);
-
+	fn do_feed_values(who: T::AccountId, values: Vec<(T::OracleKey, T::OracleValue)>) -> DispatchResult {
 		let now = T::Time::now();
 		for (key, value) in &values {
 			let timestamped = TimestampedValue {
@@ -259,7 +267,7 @@ impl<T: Config<I>, I: 'static> DataProviderExtended<T::OracleKey, TimestampedVal
 }
 
 impl<T: Config<I>, I: 'static> DataFeeder<T::OracleKey, T::OracleValue, T::AccountId> for Pallet<T, I> {
-	fn feed_value(who: T::AccountId, key: T::OracleKey, value: T::OracleValue) -> DispatchResult {
-		Self::do_feed_values(Some(who), vec![(key, value)])
+	fn feed_value(who: Option<T::AccountId>, key: T::OracleKey, value: T::OracleValue) -> DispatchResult {
+		Self::do_feed_values(Self::ensure_account(who)?, vec![(key, value)])
 	}
 }

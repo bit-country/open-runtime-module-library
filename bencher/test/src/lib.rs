@@ -5,7 +5,7 @@ pub mod mock;
 mod tests;
 mod weights;
 
-#[frame_support::pallet]
+#[frame_support::pallet(dev_mode)]
 pub mod pallet {
 	use crate::weights::ModuleWeights;
 	use frame_support::{
@@ -21,7 +21,6 @@ pub mod pallet {
 	impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {}
 
 	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T>(PhantomData<T>);
 
 	#[pallet::storage]

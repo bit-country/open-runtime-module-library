@@ -24,7 +24,7 @@ pub type BlockNumber = u64;
 
 parameter_types! {
 	pub BlockWeights: frame_system::limits::BlockWeights =
-			frame_system::limits::BlockWeights::simple_max(Weight::from_ref_time(2_000_000_000_000).set_proof_size(u64::MAX));
+			frame_system::limits::BlockWeights::simple_max(Weight::from_parts(2_000_000_000_000, 0).set_proof_size(u64::MAX));
 }
 
 impl frame_system::Config for Runtime {
@@ -139,7 +139,7 @@ impl AsOriginId<RuntimeOrigin, OriginCaller> for MockAsOriginId {
 	fn check_dispatch_from(&self, origin: RuntimeOrigin) -> DispatchResult {
 		ensure_root(origin.clone()).or_else(|_| {
 			if let OriginCaller::Authority(ref sign) = origin.caller() {
-				if sign.origin == Box::new(RuntimeOrigin::root().caller().clone()) {
+				if *sign.origin == RuntimeOrigin::root().caller().clone() {
 					return Ok(());
 				} else {
 					return Err(BadOrigin.into());
