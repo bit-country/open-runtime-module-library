@@ -199,22 +199,19 @@ pub mod module {
         BalanceOf<T>,
         ValueQuery,
     >;
-	impl<T: Config> Default for GenesisConfig<T> {
-		fn default() -> Self {
-			GenesisConfig {
-				tokens: Default::default(),
-			}
-		}
-	}
 
     #[pallet::genesis_config]
     pub struct GenesisConfig<T: Config> {
         pub tokens: Vec<GenesisTokens<T>>,
     }
 
-	#[pallet::pallet]
-	#[pallet::without_storage_info]
-	pub struct Pallet<T>(_);
+    impl<T: Config> Default for GenesisConfig<T> {
+		fn default() -> Self {
+			GenesisConfig {
+				tokens: Default::default(),
+			}
+		}
+	}
 
     #[pallet::genesis_build]
     impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
@@ -231,12 +228,11 @@ pub mod module {
     }
 
     #[pallet::pallet]
-    #[pallet::generate_store(pub (super) trait Store)]
-    #[pallet::without_storage_info]
-    pub struct Pallet<T>(_);
+	#[pallet::without_storage_info]
+	pub struct Pallet<T>(_);
 
     #[pallet::hooks]
-    impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {}
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {}
