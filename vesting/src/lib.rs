@@ -202,7 +202,7 @@ pub mod module {
 	}
 
 	#[pallet::genesis_build]
-	impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
+	impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
 		fn build(&self) {
 			self.vesting
 				.iter()
@@ -241,7 +241,7 @@ pub mod module {
 	pub struct Pallet<T>(_);
 
 	#[pallet::hooks]
-	impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {}
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
@@ -332,7 +332,7 @@ impl<T: Config> Pallet<T> {
 
 	/// Returns locked balance based on current block number.
 	fn locked_balance(who: &T::AccountId) -> BalanceOf<T> {
-		let now = T::BlockNumberProvider::current_block_number();
+		let now = BlockNumberFor<T>Provider::current_block_number();
 		<VestingSchedules<T>>::mutate_exists(who, |maybe_schedules| {
 			let total = if let Some(schedules) = maybe_schedules.as_mut() {
 				let mut total: BalanceOf<T> = Zero::zero();

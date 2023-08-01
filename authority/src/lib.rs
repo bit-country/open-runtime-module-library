@@ -263,13 +263,13 @@ pub mod module {
 		FastTracked {
 			origin: T::PalletsOrigin,
 			index: ScheduleTaskIndex,
-			when: T::BlockNumber,
+			when: BlockNumberFor<T>,
 		},
 		/// A scheduled call is delayed.
 		Delayed {
 			origin: T::PalletsOrigin,
 			index: ScheduleTaskIndex,
-			when: T::BlockNumber,
+			when: BlockNumberFor<T>,
 		},
 		/// A scheduled call is cancelled.
 		Cancelled {
@@ -300,7 +300,7 @@ pub mod module {
 	pub struct Pallet<T>(_);
 
 	#[pallet::hooks]
-	impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {}
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
@@ -327,7 +327,7 @@ pub mod module {
 		#[pallet::weight(T::WeightInfo::schedule_dispatch_without_delay())]
 		pub fn schedule_dispatch(
 			origin: OriginFor<T>,
-			when: DispatchTime<T::BlockNumber>,
+			when: DispatchTime<BlockNumberFor<T>>,
 			priority: Priority,
 			with_delayed_origin: bool,
 			call: Box<CallOf<T>>,
@@ -347,7 +347,7 @@ pub mod module {
 			let schedule_origin = if with_delayed_origin {
 				let origin: <T as Config>::RuntimeOrigin = From::from(origin);
 				let origin: <T as Config>::RuntimeOrigin =
-					From::from(DelayedOrigin::<T::BlockNumber, T::PalletsOrigin> {
+					From::from(DelayedOrigin::<BlockNumberFor<T>, T::PalletsOrigin> {
 						delay,
 						origin: Box::new(origin.caller().clone()),
 					});
@@ -381,7 +381,7 @@ pub mod module {
 			origin: OriginFor<T>,
 			initial_origin: Box<T::PalletsOrigin>,
 			task_id: ScheduleTaskIndex,
-			when: DispatchTime<T::BlockNumber>,
+			when: DispatchTime<BlockNumberFor<T>>,
 		) -> DispatchResult {
 			let now = frame_system::Pallet::<T>::block_number();
 			let new_delay = match when {
@@ -412,7 +412,7 @@ pub mod module {
 			origin: OriginFor<T>,
 			initial_origin: Box<T::PalletsOrigin>,
 			task_id: ScheduleTaskIndex,
-			additional_delay: T::BlockNumber,
+			additional_delay: BlockNumberFor<T>,
 		) -> DispatchResult {
 			T::AuthorityConfig::check_delay_schedule(origin, &initial_origin)?;
 

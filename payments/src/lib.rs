@@ -176,7 +176,7 @@ pub mod pallet {
 		PaymentCreatorRequestedRefund {
 			from: T::AccountId,
 			to: T::AccountId,
-			expiry: T::BlockNumber,
+			expiry: BlockNumberFor<T>,
 		},
 		/// the refund request from creator was disputed by recipient
 		PaymentRefundDisputed { from: T::AccountId, to: T::AccountId },
@@ -213,7 +213,7 @@ pub mod pallet {
 		/// Hook that execute when there is leftover space in a block
 		/// This function will look for any pending scheduled tasks that can
 		/// be executed and will process them.
-		fn on_idle(now: T::BlockNumber, remaining_weight: Weight) -> Weight {
+		fn on_idle(now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
 			const MAX_TASKS_TO_PROCESS: usize = 5;
 			// used to read the task list
 			let mut used_weight = T::WeightInfo::remove_task();
