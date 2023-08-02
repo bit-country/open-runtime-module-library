@@ -2,7 +2,7 @@
 #![allow(clippy::unused_unit)]
 
 use frame_support::pallet_prelude::*;
-use frame_support::pallet_prelude::BlockNumberFor;
+use frame_system::pallet_prelude::BlockNumberFor;
 use sp_std::vec::Vec;
 use xcm::v3::prelude::*;
 
