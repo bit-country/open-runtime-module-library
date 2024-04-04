@@ -1,5 +1,5 @@
 use crate::module::*;
-use frame_support::{log, pallet_prelude::*, weights::constants::WEIGHT_PER_SECOND};
+use frame_support::{pallet_prelude::*, weights::constants::WEIGHT_REF_TIME_PER_SECOND};
 use orml_traits::{
 	asset_registry::{
 		AssetMetadata, AssetProcessor, FixedConversionRateProvider, Inspect, Mutate, WeightToFeeConverter,
@@ -12,13 +12,14 @@ use sp_runtime::{
 	ArithmeticError, FixedU128,
 };
 use sp_std::prelude::*;
-use xcm::latest::prelude::*;
+use xcm::v3::{prelude::*, Weight as XcmWeight};
 use xcm::VersionedMultiLocation;
 use xcm_builder::TakeRevenue;
 use xcm_executor::{traits::WeightTrader, Assets};
 
 /// Alias for AssetMetadata to improve readability (and to placate clippy)
-pub type DefaultAssetMetadata<T> = AssetMetadata<<T as Config>::Balance, <T as Config>::CustomMetadata>;
+pub type DefaultAssetMetadata<T> =
+	AssetMetadata<<T as Config>::Balance, <T as Config>::CustomMetadata, <T as Config>::StringLimit>;
 
 /// An AssetProcessor that assigns a sequential ID
 pub struct SequentialId<T>(PhantomData<T>);
@@ -55,7 +56,7 @@ pub struct FixedRateAssetRegistryTrader<P: FixedConversionRateProvider>(PhantomD
 impl<P: FixedConversionRateProvider> WeightToFeeConverter for FixedRateAssetRegistryTrader<P> {
 	fn convert_weight_to_fee(location: &MultiLocation, weight: Weight) -> Option<u128> {
 		let fee_per_second = P::get_fee_per_second(location)?;
-		let weight_ratio = FixedU128::saturating_from_rational(weight as u128, WEIGHT_PER_SECOND as u128);
+		let weight_ratio = FixedU128::saturating_from_rational(weight.ref_time(), WEIGHT_REF_TIME_PER_SECOND);
 		let amount = weight_ratio.saturating_mul_int(fee_per_second);
 		Some(amount)
 	}
@@ -89,7 +90,7 @@ impl<W: WeightToFeeConverter, R: TakeRevenue> WeightTrader for AssetRegistryTrad
 		}
 	}
 
-	fn buy_weight(&mut self, weight: Weight, payment: Assets) -> Result<Assets, XcmError> {
+	fn buy_weight(&mut self, weight: XcmWeight, payment: Assets, _context: &XcmContext) -> Result<Assets, XcmError> {
 		log::trace!(
 			target: "xcm::weight",
 			"AssetRegistryTrader::buy_weight weight: {:?}, payment: {:?}",
@@ -112,16 +113,16 @@ impl<W: WeightToFeeConverter, R: TakeRevenue> WeightTrader for AssetRegistryTrad
 						return Ok(payment);
 					}
 
-					if let Ok(unused) = payment.clone().checked_sub((asset.clone(), fee_increase).into()) {
+					if let Ok(unused) = payment.clone().checked_sub((*asset, fee_increase).into()) {
 						let (existing_weight, existing_fee) = match self.bought_weight {
 							Some(ref x) => (x.weight, x.amount),
-							None => (0, 0),
+							None => (Weight::zero(), 0),
 						};
 
 						self.bought_weight = Some(BoughtWeight {
 							amount: existing_fee.checked_add(fee_increase).ok_or(XcmError::Overflow)?,
-							weight: existing_weight.checked_add(weight).ok_or(XcmError::Overflow)?,
-							asset_location: location.clone(),
+							weight: existing_weight.checked_add(&weight).ok_or(XcmError::Overflow)?,
+							asset_location: *location,
 						});
 						return Ok(unused);
 					}
@@ -131,7 +132,7 @@ impl<W: WeightToFeeConverter, R: TakeRevenue> WeightTrader for AssetRegistryTrad
 		Err(XcmError::TooExpensive)
 	}
 
-	fn refund_weight(&mut self, weight: Weight) -> Option<MultiAsset> {
+	fn refund_weight(&mut self, weight: XcmWeight, _context: &XcmContext) -> Option<MultiAsset> {
 		log::trace!(target: "xcm::weight", "AssetRegistryTrader::refund_weight weight: {:?}", weight);
 
 		match self.bought_weight {
@@ -143,7 +144,7 @@ impl<W: WeightToFeeConverter, R: TakeRevenue> WeightTrader for AssetRegistryTrad
 				bought.weight = new_weight;
 				bought.amount = new_amount;
 
-				Some((AssetId::Concrete(bought.asset_location.clone()), refunded_amount).into())
+				Some((AssetId::Concrete(bought.asset_location), refunded_amount).into())
 			}
 			None => None, // nothing to refund
 		}
@@ -153,7 +154,7 @@ impl<W: WeightToFeeConverter, R: TakeRevenue> WeightTrader for AssetRegistryTrad
 impl<W: WeightToFeeConverter, R: TakeRevenue> Drop for AssetRegistryTrader<W, R> {
 	fn drop(&mut self) {
 		if let Some(ref bought) = self.bought_weight {
-			R::take_revenue((AssetId::Concrete(bought.asset_location.clone()), bought.amount).into());
+			R::take_revenue((AssetId::Concrete(bought.asset_location), bought.amount).into());
 		}
 	}
 }
@@ -177,16 +178,19 @@ impl<T: Config> Inspect for Pallet<T> {
 	type AssetId = T::AssetId;
 	type Balance = T::Balance;
 	type CustomMetadata = T::CustomMetadata;
+	type StringLimit = T::StringLimit;
 
 	fn asset_id(location: &MultiLocation) -> Option<Self::AssetId> {
 		Pallet::<T>::location_to_asset_id(location)
 	}
 
-	fn metadata(id: &Self::AssetId) -> Option<AssetMetadata<Self::Balance, Self::CustomMetadata>> {
+	fn metadata(id: &Self::AssetId) -> Option<AssetMetadata<Self::Balance, Self::CustomMetadata, Self::StringLimit>> {
 		Pallet::<T>::metadata(id)
 	}
 
-	fn metadata_by_location(location: &MultiLocation) -> Option<AssetMetadata<Self::Balance, Self::CustomMetadata>> {
+	fn metadata_by_location(
+		location: &MultiLocation,
+	) -> Option<AssetMetadata<Self::Balance, Self::CustomMetadata, Self::StringLimit>> {
 		Pallet::<T>::fetch_metadata_by_location(location)
 	}
 
@@ -198,7 +202,7 @@ impl<T: Config> Inspect for Pallet<T> {
 impl<T: Config> Mutate for Pallet<T> {
 	fn register_asset(
 		asset_id: Option<Self::AssetId>,
-		metadata: AssetMetadata<Self::Balance, Self::CustomMetadata>,
+		metadata: AssetMetadata<Self::Balance, Self::CustomMetadata, Self::StringLimit>,
 	) -> DispatchResult {
 		Pallet::<T>::do_register_asset(metadata, asset_id)
 	}
@@ -206,8 +210,8 @@ impl<T: Config> Mutate for Pallet<T> {
 	fn update_asset(
 		asset_id: Self::AssetId,
 		decimals: Option<u32>,
-		name: Option<Vec<u8>>,
-		symbol: Option<Vec<u8>>,
+		name: Option<BoundedVec<u8, Self::StringLimit>>,
+		symbol: Option<BoundedVec<u8, Self::StringLimit>>,
 		existential_deposit: Option<Self::Balance>,
 		location: Option<Option<VersionedMultiLocation>>,
 		additional: Option<Self::CustomMetadata>,

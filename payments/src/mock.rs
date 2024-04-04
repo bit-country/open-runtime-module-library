@@ -1,20 +1,18 @@
 use crate as payment;
 use crate::PaymentDetail;
 use frame_support::{
+	dispatch::DispatchClass,
 	parameter_types,
-	traits::{ConstU32, Contains, Everything, GenesisBuild, Hooks, OnFinalize},
-	weights::DispatchClass,
+	traits::{ConstU32, Contains, Everything, Hooks, OnFinalize},
 };
 use frame_system as system;
 use orml_traits::parameter_type_with_key;
 use sp_core::H256;
 use sp_runtime::{
-	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
-	Percent,
+	BuildStorage, Percent,
 };
 
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 pub type Balance = u128;
 
@@ -32,14 +30,10 @@ pub const MARKETPLACE_FEE_PERCENTAGE: u8 = 10;
 pub const CANCEL_BLOCK_BUFFER: u64 = 600;
 
 frame_support::construct_runtime!(
-	pub enum Test where
-		Block = Block,
-		NodeBlock = Block,
-		UncheckedExtrinsic = UncheckedExtrinsic,
-	{
-		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-		Tokens: orml_tokens::{Pallet, Call, Config<T>, Storage, Event<T>},
-		Payment: payment::{Pallet, Call, Storage, Event<T>},
+	pub enum Test {
+		System: frame_system,
+		Tokens: orml_tokens,
+		Payment: payment,
 	}
 );
 
@@ -53,16 +47,15 @@ impl system::Config for Test {
 	type BlockWeights = ();
 	type BlockLength = ();
 	type DbWeight = ();
-	type Origin = Origin;
-	type Call = Call;
-	type Index = u64;
-	type BlockNumber = u64;
+	type RuntimeOrigin = RuntimeOrigin;
+	type RuntimeCall = RuntimeCall;
+	type Nonce = u64;
 	type Hash = H256;
 	type Hashing = BlakeTwo256;
 	type AccountId = AccountId;
 	type Lookup = IdentityLookup<Self::AccountId>;
-	type Header = Header;
-	type Event = Event;
+	type Block = Block;
+	type RuntimeEvent = RuntimeEvent;
 	type BlockHashCount = BlockHashCount;
 	type Version = ();
 	type PalletInfo = PalletInfo;
@@ -96,16 +89,14 @@ impl orml_tokens::Config for Test {
 	type Amount = i64;
 	type Balance = Balance;
 	type CurrencyId = u32;
-	type Event = Event;
+	type RuntimeEvent = RuntimeEvent;
 	type ExistentialDeposits = ExistentialDeposits;
-	type OnDust = ();
+	type CurrencyHooks = ();
 	type WeightInfo = ();
 	type MaxLocks = MaxLocks;
 	type DustRemovalWhitelist = MockDustRemovalWhitelist;
 	type MaxReserves = ConstU32<2>;
 	type ReserveIdentifier = ReserveIdentifier;
-	type OnNewTokenAccount = ();
-	type OnKilledTokenAccount = ();
 }
 
 pub struct MockDisputeResolver;
@@ -138,7 +129,7 @@ parameter_types! {
 }
 
 impl payment::Config for Test {
-	type Event = Event;
+	type RuntimeEvent = RuntimeEvent;
 	type Asset = Tokens;
 	type DisputeResolver = MockDisputeResolver;
 	type IncentivePercentage = IncentivePercentage;
@@ -151,7 +142,7 @@ impl payment::Config for Test {
 
 // Build genesis storage according to the mock runtime.
 pub fn new_test_ext() -> sp_io::TestExternalities {
-	let mut t = system::GenesisConfig::default().build_storage::<Test>().unwrap();
+	let mut t = system::GenesisConfig::<Test>::default().build_storage().unwrap();
 
 	orml_tokens::GenesisConfig::<Test> {
 		balances: vec![
@@ -185,7 +176,7 @@ pub fn run_n_blocks(n: u64) -> u64 {
 		};
 		// ensure the on_idle is executed
 		<frame_system::Pallet<Test>>::register_extra_weight_unchecked(
-			Payment::on_idle(block_number, idle_weight),
+			Payment::on_idle(block_number, frame_support::weights::Weight::from_parts(idle_weight, 0)),
 			DispatchClass::Mandatory,
 		);
 

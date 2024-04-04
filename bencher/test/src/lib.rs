@@ -5,7 +5,7 @@ pub mod mock;
 mod tests;
 mod weights;
 
-#[frame_support::pallet]
+#[frame_support::pallet(dev_mode)]
 pub mod pallet {
 	use crate::weights::ModuleWeights;
 	use frame_support::{
@@ -21,7 +21,6 @@ pub mod pallet {
 	impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {}
 
 	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T>(PhantomData<T>);
 
 	#[pallet::storage]
@@ -38,10 +37,11 @@ pub mod pallet {
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
+		#[pallet::call_index(0)]
 		#[pallet::weight(0)]
-		#[orml_weight_meter::start(ModuleWeights::<T>::set_value())]
+		#[orml_weight_meter::start(ModuleWeights::<T>::set_value().ref_time())]
 		pub fn set_value(origin: OriginFor<T>, n: u32) -> DispatchResultWithPostInfo {
-			let _sender = frame_system::ensure_signed(origin)?;
+			frame_system::ensure_signed(origin)?;
 			Value::<T>::get();
 			Value::<T>::put(n);
 			Value::<T>::put(n + 1);
@@ -49,16 +49,17 @@ pub mod pallet {
 			Ok(Some(orml_weight_meter::used_weight()).into())
 		}
 
+		#[pallet::call_index(1)]
 		#[pallet::weight(0)]
 		pub fn dummy(origin: OriginFor<T>, _n: u32) -> DispatchResult {
-			let _sender = frame_system::ensure_none(origin)?;
+			frame_system::ensure_none(origin)?;
 			Foo::<T>::put(1);
 			Ok(())
 		}
 	}
 
 	impl<T: Config> Pallet<T> {
-		#[orml_weight_meter::weight(ModuleWeights::<T>::set_foo())]
+		#[orml_weight_meter::weight(ModuleWeights::<T>::set_foo().ref_time())]
 		pub(crate) fn set_foo() -> frame_support::dispatch::DispatchResult {
 			Value::<T>::put(2);
 
@@ -77,12 +78,12 @@ pub mod pallet {
 
 		#[orml_weight_meter::weight(0)]
 		pub(crate) fn remove_all_bar() {
-			Bar::<T>::remove_all(None);
+			_ = Bar::<T>::clear(10, None);
 		}
 
 		#[orml_weight_meter::weight(0)]
 		pub(crate) fn remove_all_bar_with_limit() {
-			Bar::<T>::remove_all(Some(10));
+			_ = Bar::<T>::clear(10, None);
 		}
 	}
 }

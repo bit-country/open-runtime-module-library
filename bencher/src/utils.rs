@@ -36,6 +36,18 @@ pub trait Bench {
 		println!("{}", msg);
 	}
 
+	fn commit_db(&mut self) {
+		self.commit()
+	}
+
+	fn wipe_db(&mut self) {
+		self.wipe()
+	}
+
+	fn reset_read_write_count(&mut self) {
+		self.reset_read_write_count()
+	}
+
 	fn start_timer(&mut self) {
 		let tracker = &***self
 			.extension::<BenchTrackerExt>()
@@ -91,5 +103,12 @@ pub trait Bench {
 			.extension::<BenchTrackerExt>()
 			.expect("No `bench_tracker` associated for the current context!");
 		tracker.reset();
+	}
+
+	fn count_clear_prefix(&mut self) {
+		let tracker = &***self
+			.extension::<BenchTrackerExt>()
+			.expect("No `bench_tracker` associated for the current context!");
+		tracker.count_clear_prefix();
 	}
 }

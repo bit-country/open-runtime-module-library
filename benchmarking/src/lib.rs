@@ -5,6 +5,8 @@
 
 mod tests;
 
+#[doc(hidden)]
+pub use codec;
 pub use frame_benchmarking::{
 	benchmarking, whitelisted_caller, BenchmarkBatch, BenchmarkConfig, BenchmarkError, BenchmarkList,
 	BenchmarkMetadata, BenchmarkParameter, BenchmarkResult, Benchmarking, BenchmarkingSetup,
@@ -99,14 +101,14 @@ macro_rules! whitelist_account {
 ///   foo {
 ///     let caller = account::<AccountId>(b"caller", 0, benchmarks_seed);
 ///     let l in 1 .. MAX_LENGTH => initialize_l(l);
-///   }: _(Origin::Signed(caller), vec![0u8; l])
+///   }: _(RuntimeOrigin::signed(caller), vec![0u8; l])
 ///
 ///   // second dispatchable: bar; this is a root dispatchable and accepts a `u8` vector of size
 ///   // `l`.
 ///   // In this case, we explicitly name the call using `bar` instead of `_`.
 ///   bar {
 ///     let l in 1 .. MAX_LENGTH => initialize_l(l);
-///   }: bar(Origin::Root, vec![0u8; l])
+///   }: bar(RuntimeOrigin::root, vec![0u8; l])
 ///
 ///   // third dispatchable: baz; this is a user dispatchable. It isn't dependent on length like the
 ///   // other two but has its own complexity `c` that needs setting up. It uses `caller` (in the
@@ -115,13 +117,13 @@ macro_rules! whitelist_account {
 ///   baz1 {
 ///     let caller = account::<AccountId>(b"caller", 0, benchmarks_seed);
 ///     let c = 0 .. 10 => setup_c(&caller, c);
-///   }: baz(Origin::Signed(caller))
+///   }: baz(RuntimeOrigin::signed(caller))
 ///
 ///   // this is a second benchmark of the baz dispatchable with a different setup.
 ///   baz2 {
 ///     let caller = account::<AccountId>(b"caller", 0, benchmarks_seed);
 ///     let c = 0 .. 10 => setup_c_in_some_other_way(&caller, c);
-///   }: baz(Origin::Signed(caller))
+///   }: baz(RuntimeOrigin::signed(caller))
 ///
 ///   // this is benchmarking some code that is not a dispatchable.
 ///   populate_a_set {
@@ -289,13 +291,13 @@ macro_rules! benchmarks_iter {
 									>:: [< new_call_variant_ $dispatch >] (
 								$($arg),*
 							);
-						let __benchmarked_call_encoded = $crate::frame_support::codec::Encode::encode(
+						let __benchmarked_call_encoded = $crate::codec::Encode::encode(
 							&__call
 						);
 					}: {
 						let __call_decoded = <
 								$pallet::Call::<$runtime $(, $instance )?>
-								as $crate::frame_support::codec::Decode
+								as $crate::codec::Decode
 								>::decode(&mut &__benchmarked_call_encoded[..])
 							.expect("call is encoded above, encoding must be correct");
 						let __origin = $crate::to_origin!($origin $(, $origin_type)?);
@@ -450,7 +452,7 @@ macro_rules! to_origin {
 		$origin.into()
 	};
 	($origin:expr, $origin_type:ty) => {
-		<<$runtime as frame_system::Config>::Origin as From<$origin_type>>::from($origin)
+		<<$runtime as frame_system::Config>::RuntimeOrigin as From<$origin_type>>::from($origin)
 	};
 }
 
@@ -741,6 +743,9 @@ macro_rules! impl_benchmark {
 					$crate::BenchmarkMetadata {
 						name: benchmark.as_bytes().to_vec(),
 						components,
+						// TODO: Not supported by V2 syntax as of yet.
+						// https://github.com/paritytech/substrate/issues/13132
+						pov_modes: vec![],
 					}
 				}).collect::<$crate::Vec<_>>()
 			}
@@ -767,6 +772,11 @@ macro_rules! impl_benchmark {
 						$crate::whitelisted_caller::<<$runtime as frame_system::Config>::AccountId>()
 					);
 				whitelist.push(whitelisted_caller_key.into());
+				// Whitelist the transactional layer.
+				let transactional_layer_key = $crate::TrackedStorageKey::new(
+					$crate::frame_support::storage::transactional::TRANSACTION_LEVEL_KEY.into()
+				);
+				whitelist.push(transactional_layer_key);
 				$crate::benchmarking::set_whitelist(whitelist);
 
 				let mut results: $crate::Vec<$crate::BenchmarkResult> = $crate::Vec::new();
@@ -1175,6 +1185,14 @@ macro_rules! impl_benchmark_test_suite {
 											$crate::str::from_utf8(benchmark_name)
 												.expect("benchmark name is always a valid string!"),
 										);
+									},
+									$crate::BenchmarkError::Weightless => {
+										// This is considered a success condition.
+										$crate::log::error!(
+											"WARNING: benchmark error weightless skipped - {}",
+											$crate::str::from_utf8(benchmark_name)
+												.expect("benchmark name is always a valid string!"),
+										);
 									}
 								}
 							},
@@ -1228,7 +1246,7 @@ pub fn show_benchmark_debug_info(
 /// For example:
 ///
 /// ```
-/// use frame_benchmarking::TrackedStorageKey;
+/// use sp_storage::TrackedStorageKey;
 /// let whitelist: Vec<TrackedStorageKey> = vec![
 ///     // Block Number
 ///     hex_literal::hex!("26aa394eea5630e07c48ae0c9558cef702a5c1b19ab7a04f536c519aca4983ac").to_vec().into(),
@@ -1309,6 +1327,17 @@ macro_rules! add_benchmark {
 							.expect("benchmark name is always a valid string!")
 					);
 					None
+				},
+				Err($crate::BenchmarkError::Weightless) => {
+					$crate::log::error!(
+						"WARNING: benchmark weightless skipped - {}",
+						$crate::str::from_utf8(benchmark)
+							.expect("benchmark name is always a valid string!")
+					);
+					Some(vec![$crate::BenchmarkResult {
+						components: selected_components.clone(),
+						.. Default::default()
+					}])
 				}
 			};
 

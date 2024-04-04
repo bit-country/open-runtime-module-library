@@ -73,7 +73,7 @@ pub mod pallet {
 	};
 	use frame_support::{
 		dispatch::DispatchResultWithPostInfo, fail, pallet_prelude::*, require_transactional,
-		storage::bounded_btree_map::BoundedBTreeMap, traits::tokens::BalanceStatus, transactional,
+		storage::bounded_btree_map::BoundedBTreeMap, traits::tokens::BalanceStatus,
 	};
 	use frame_system::pallet_prelude::*;
 	use orml_traits::{MultiCurrency, MultiReservableCurrency};
@@ -87,7 +87,7 @@ pub mod pallet {
 	pub type AssetIdOf<T> = <<T as Config>::Asset as MultiCurrency<<T as frame_system::Config>::AccountId>>::CurrencyId;
 	pub type BoundedDataOf<T> = BoundedVec<u8, <T as Config>::MaxRemarkLength>;
 	/// type of ScheduledTask used by the pallet
-	pub type ScheduledTaskOf<T> = ScheduledTask<<T as frame_system::Config>::BlockNumber>;
+	pub type ScheduledTaskOf<T> = ScheduledTask<BlockNumberFor<T>>;
 	/// list of ScheduledTasks, stored as a BoundedBTreeMap
 	pub type ScheduledTaskList<T> = BoundedBTreeMap<
 		(
@@ -102,7 +102,7 @@ pub mod pallet {
 	pub trait Config: frame_system::Config {
 		/// Because this pallet emits events, it depends on the runtime's
 		/// definition of an event.
-		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 		/// the type of assets this pallet can hold in payment
 		type Asset: MultiReservableCurrency<Self::AccountId>;
 		/// Dispute resolution account
@@ -118,7 +118,7 @@ pub mod pallet {
 		/// Buffer period - number of blocks to wait before user can claim
 		/// canceled payment
 		#[pallet::constant]
-		type CancelBufferBlockLength: Get<Self::BlockNumber>;
+		type CancelBufferBlockLength: Get<BlockNumberFor<Self>>;
 		/// Buffer period - number of blocks to wait before user can claim
 		/// canceled payment
 		#[pallet::constant]
@@ -128,7 +128,6 @@ pub mod pallet {
 	}
 
 	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::storage]
@@ -177,7 +176,7 @@ pub mod pallet {
 		PaymentCreatorRequestedRefund {
 			from: T::AccountId,
 			to: T::AccountId,
-			expiry: T::BlockNumber,
+			expiry: BlockNumberFor<T>,
 		},
 		/// the refund request from creator was disputed by recipient
 		PaymentRefundDisputed { from: T::AccountId, to: T::AccountId },
@@ -214,15 +213,17 @@ pub mod pallet {
 		/// Hook that execute when there is leftover space in a block
 		/// This function will look for any pending scheduled tasks that can
 		/// be executed and will process them.
-		fn on_idle(now: T::BlockNumber, mut remaining_weight: Weight) -> Weight {
+		fn on_idle(now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
 			const MAX_TASKS_TO_PROCESS: usize = 5;
-			// reduce the weight used to read the task list
-			remaining_weight = remaining_weight.saturating_sub(T::WeightInfo::remove_task());
+			// used to read the task list
+			let mut used_weight = T::WeightInfo::remove_task();
 			let cancel_weight = T::WeightInfo::cancel();
 
 			// calculate count of tasks that can be processed with remaining weight
 			let possible_task_count: usize = remaining_weight
-				.saturating_div(cancel_weight)
+				.saturating_sub(used_weight)
+				.saturating_div(cancel_weight.ref_time())
+				.ref_time()
 				.try_into()
 				.unwrap_or(MAX_TASKS_TO_PROCESS);
 
@@ -238,9 +239,9 @@ pub mod pallet {
 				// order by oldest task to process
 				task_list.sort_by(|(_, t), (_, x)| x.when.cmp(&t.when));
 
-				while !task_list.is_empty() && remaining_weight >= cancel_weight {
+				while !task_list.is_empty() && used_weight.all_lte(remaining_weight) {
 					if let Some((account_pair, _)) = task_list.pop() {
-						remaining_weight = remaining_weight.saturating_sub(cancel_weight);
+						used_weight = used_weight.saturating_add(cancel_weight);
 						// remove the task form the tasks storage
 						tasks.remove(&account_pair);
 
@@ -267,7 +268,7 @@ pub mod pallet {
 					}
 				}
 			});
-			remaining_weight
+			used_weight
 		}
 	}
 
@@ -279,7 +280,7 @@ pub mod pallet {
 		/// the option to add a remark, this remark can then be used to run
 		/// custom logic and trigger alternate payment flows. the specified
 		/// amount.
-		#[transactional]
+		#[pallet::call_index(0)]
 		#[pallet::weight(T::WeightInfo::pay(T::MaxRemarkLength::get()))]
 		pub fn pay(
 			origin: OriginFor<T>,
@@ -314,7 +315,7 @@ pub mod pallet {
 
 		/// Release any created payment, this will transfer the reserved amount
 		/// from the creator of the payment to the assigned recipient
-		#[transactional]
+		#[pallet::call_index(1)]
 		#[pallet::weight(T::WeightInfo::release())]
 		pub fn release(origin: OriginFor<T>, to: T::AccountId) -> DispatchResultWithPostInfo {
 			let from = ensure_signed(origin)?;
@@ -333,7 +334,7 @@ pub mod pallet {
 		/// Cancel a payment in created state, this will release the reserved
 		/// back to creator of the payment. This extrinsic can only be called by
 		/// the recipient of the payment
-		#[transactional]
+		#[pallet::call_index(2)]
 		#[pallet::weight(T::WeightInfo::cancel())]
 		pub fn cancel(origin: OriginFor<T>, creator: T::AccountId) -> DispatchResultWithPostInfo {
 			let who = ensure_signed(origin)?;
@@ -356,7 +357,7 @@ pub mod pallet {
 		/// recipient of the payment.
 		/// This extrinsic allows the assigned judge to
 		/// cancel/release/partial_release the payment.
-		#[transactional]
+		#[pallet::call_index(3)]
 		#[pallet::weight(T::WeightInfo::resolve_payment())]
 		pub fn resolve_payment(
 			origin: OriginFor<T>,
@@ -392,7 +393,7 @@ pub mod pallet {
 		/// Allow the creator of a payment to initiate a refund that will return
 		/// the funds after a configured amount of time that the reveiver has to
 		/// react and opose the request
-		#[transactional]
+		#[pallet::call_index(4)]
 		#[pallet::weight(T::WeightInfo::request_refund())]
 		pub fn request_refund(origin: OriginFor<T>, recipient: T::AccountId) -> DispatchResultWithPostInfo {
 			let who = ensure_signed(origin)?;
@@ -440,7 +441,7 @@ pub mod pallet {
 		/// payment creator This does not cancel the request, instead sends the
 		/// payment to a NeedsReview state The assigned resolver account can
 		/// then change the state of the payment after review.
-		#[transactional]
+		#[pallet::call_index(5)]
 		#[pallet::weight(T::WeightInfo::dispute_refund())]
 		pub fn dispute_refund(origin: OriginFor<T>, creator: T::AccountId) -> DispatchResultWithPostInfo {
 			use PaymentState::*;
@@ -487,7 +488,7 @@ pub mod pallet {
 		// using the `accept_and_pay` extrinsic.  The payment will be in
 		// PaymentRequested State and can only be modified by the `accept_and_pay`
 		// extrinsic.
-		#[transactional]
+		#[pallet::call_index(6)]
 		#[pallet::weight(T::WeightInfo::request_payment())]
 		pub fn request_payment(
 			origin: OriginFor<T>,
@@ -516,7 +517,7 @@ pub mod pallet {
 		// This extrinsic allows the sender to fulfill a payment request created by a
 		// recipient. The amount will be transferred to the recipient and payment
 		// removed from storage
-		#[transactional]
+		#[pallet::call_index(7)]
 		#[pallet::weight(T::WeightInfo::accept_and_pay())]
 		pub fn accept_and_pay(origin: OriginFor<T>, to: T::AccountId) -> DispatchResultWithPostInfo {
 			let from = ensure_signed(origin)?;
@@ -623,7 +624,7 @@ pub mod pallet {
 				// unreserve the incentive amount and fees from the owner account
 				match payment.fee_detail {
 					Some((fee_recipient, fee_amount)) => {
-						T::Asset::unreserve(payment.asset, from, payment.incentive_amount + fee_amount);
+						T::Asset::unreserve(payment.asset, from, payment.incentive_amount.saturating_add(fee_amount));
 						// transfer fee to marketplace if operation is not cancel
 						if recipient_share != Percent::zero() {
 							T::Asset::transfer(

@@ -8,6 +8,7 @@ use mock::*;
 use orml_traits::{ConcreteFungibleAsset, MultiCurrency};
 use polkadot_parachain::primitives::Sibling;
 use sp_runtime::{traits::AccountIdConversion, AccountId32};
+use xcm::{v3::OriginKind::SovereignAccount, VersionedXcm};
 use xcm_simulator::TestExt;
 
 fn para_a_account() -> AccountId32 {
@@ -65,13 +66,13 @@ fn send_relay_chain_asset_to_relay_chain() {
 				MultiLocation::new(
 					1,
 					X1(Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					})
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaTokens::free_balance(CurrencyId::R, &ALICE), 500);
 	});
@@ -100,13 +101,13 @@ fn send_relay_chain_asset_to_relay_chain_with_fee() {
 				MultiLocation::new(
 					1,
 					X1(Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					})
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaTokens::free_balance(CurrencyId::R, &ALICE), 500);
 	});
@@ -134,13 +135,13 @@ fn cannot_lost_fund_on_send_failed() {
 						Parent,
 						Parachain(100),
 						Junction::AccountId32 {
-							network: NetworkId::Kusama,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::XcmExecutionFailed
 		);
@@ -168,14 +169,14 @@ fn send_relay_chain_asset_to_sibling() {
 					X2(
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaTokens::free_balance(CurrencyId::R, &ALICE), 500);
 	});
@@ -210,14 +211,14 @@ fn send_relay_chain_asset_to_sibling_with_fee() {
 					X2(
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaTokens::free_balance(CurrencyId::R, &ALICE), 500);
 	});
@@ -258,13 +259,13 @@ fn send_sibling_asset_to_reserve_sibling() {
 					Parent,
 					Parachain(2),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					},
 				)
 					.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 
 		assert_eq!(ParaTokens::free_balance(CurrencyId::B, &ALICE), 500);
@@ -283,13 +284,13 @@ fn send_sibling_asset_to_reserve_sibling() {
 					Parent,
 					Parachain(1),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: ALICE.into(),
 					},
 				)
 					.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &BOB), 500);
 	});
@@ -323,13 +324,13 @@ fn send_sibling_asset_to_reserve_sibling_with_fee() {
 					Parent,
 					Parachain(2),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					},
 				)
 					.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 
 		assert_eq!(ParaTokens::free_balance(CurrencyId::B, &ALICE), 500);
@@ -366,13 +367,13 @@ fn send_sibling_asset_to_reserve_sibling_with_distinct_fee() {
 					Parent,
 					Parachain(2),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					},
 				)
 					.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 
 		assert_eq!(ParaTokens::free_balance(CurrencyId::B, &ALICE), 550);
@@ -412,13 +413,13 @@ fn send_sibling_asset_to_reserve_sibling_with_distinct_fee_index_works() {
 					Parent,
 					Parachain(2),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					},
 				)
 					.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 
 		assert_eq!(ParaTokens::free_balance(CurrencyId::B, &ALICE), 550);
@@ -457,14 +458,14 @@ fn send_sibling_asset_to_non_reserve_sibling() {
 					X2(
 						Parachain(3),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaTokens::free_balance(CurrencyId::B, &ALICE), 500);
 	});
@@ -504,14 +505,14 @@ fn send_sibling_asset_to_non_reserve_sibling_with_fee() {
 					X2(
 						Parachain(3),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaTokens::free_balance(CurrencyId::B, &ALICE), 500);
 	});
@@ -546,14 +547,14 @@ fn send_self_parachain_asset_to_sibling() {
 					X2(
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 
 		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &ALICE), 500);
@@ -583,14 +584,14 @@ fn send_self_parachain_asset_to_sibling_with_fee() {
 					X2(
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 
 		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &ALICE), 500);
@@ -621,14 +622,14 @@ fn send_self_parachain_asset_to_sibling_with_distinct_fee() {
 					X2(
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 
 		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &ALICE), 550);
@@ -675,13 +676,13 @@ fn sending_sibling_asset_to_reserve_sibling_with_relay_fee_works() {
 					Parent,
 					Parachain(3),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					},
 				)
 					.into()
 			),
-			weight as u64,
+			WeightLimit::Limited((weight as u64).into()),
 		));
 		assert_eq!(550, ParaTokens::free_balance(CurrencyId::C, &ALICE));
 		assert_eq!(1000 - fee_amount, ParaTokens::free_balance(CurrencyId::R, &ALICE));
@@ -735,13 +736,13 @@ fn sending_sibling_asset_to_reserve_sibling_with_relay_fee_works_with_relative_s
 					Parent,
 					Parachain(3),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					},
 				)
 					.into()
 			),
-			weight as u64,
+			WeightLimit::Limited((weight as u64).into()),
 		));
 		assert_eq!(550, ParaRelativeTokens::free_balance(CurrencyId::C, &ALICE));
 		assert_eq!(
@@ -798,13 +799,13 @@ fn sending_sibling_asset_to_reserve_sibling_with_relay_fee_not_enough() {
 					Parent,
 					Parachain(3),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					},
 				)
 					.into()
 			),
-			weight as u64,
+			WeightLimit::Limited((weight as u64).into()),
 		));
 		assert_eq!(550, ParaTokens::free_balance(CurrencyId::C, &ALICE));
 		assert_eq!(1000 - fee_amount, ParaTokens::free_balance(CurrencyId::R, &ALICE));
@@ -844,13 +845,13 @@ fn transfer_asset_with_relay_fee_failed() {
 						Parent,
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::InvalidAsset
 		);
@@ -868,13 +869,13 @@ fn transfer_asset_with_relay_fee_failed() {
 						Parent,
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::InvalidAsset
 		);
@@ -893,13 +894,13 @@ fn transfer_asset_with_relay_fee_failed() {
 						Parent,
 						Parachain(3),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::FeeNotEnough
 		);
@@ -917,13 +918,13 @@ fn transfer_asset_with_relay_fee_failed() {
 						Parent,
 						Parachain(1),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::MinXcmFeeNotDefined
 		);
@@ -935,22 +936,23 @@ fn transfer_no_reserve_assets_fails() {
 	TestNet::reset();
 
 	ParaA::execute_with(|| {
+		let asset_id: AssetId = X1(Junction::from(BoundedVec::try_from(b"B".to_vec()).unwrap())).into();
 		assert_noop!(
 			ParaXTokens::transfer_multiasset(
 				Some(ALICE).into(),
-				Box::new((X1(GeneralKey(b"B".to_vec().try_into().unwrap())).into(), 100).into()),
+				Box::new((asset_id, 100).into()),
 				Box::new(
 					(
 						Parent,
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into()
 						}
 					)
 						.into()
 				),
-				50,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::AssetHasNoReserve
 		);
@@ -972,14 +974,14 @@ fn transfer_to_self_chain_fails() {
 						X2(
 							Parachain(1),
 							Junction::AccountId32 {
-								network: NetworkId::Any,
+								network: None,
 								id: BOB.into()
 							}
 						)
 					)
 					.into()
 				),
-				50,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::NotCrossChainTransfer
 		);
@@ -999,13 +1001,13 @@ fn transfer_to_invalid_dest_fails() {
 					MultiLocation::new(
 						0,
 						X1(Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into()
 						})
 					)
 					.into()
 				),
-				50,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::InvalidDest
 		);
@@ -1021,23 +1023,22 @@ fn send_as_sovereign() {
 	});
 
 	ParaA::execute_with(|| {
-		use xcm::latest::OriginKind::SovereignAccount;
-
-		let call =
-			relay::Call::System(frame_system::Call::<relay::Runtime>::remark_with_event { remark: vec![1, 1, 1] });
-		let assets: MultiAsset = (Here, 1_000_000_000_000).into();
+		let call = relay::RuntimeCall::System(frame_system::Call::<relay::Runtime>::remark_with_event {
+			remark: vec![1, 1, 1],
+		});
+		let assets: MultiAsset = (Here, 1_000_000_000_000u128).into();
 		assert_ok!(para::OrmlXcm::send_as_sovereign(
-			para::Origin::root(),
+			para::RuntimeOrigin::root(),
 			Box::new(Parent.into()),
 			Box::new(VersionedXcm::from(Xcm(vec![
 				WithdrawAsset(assets.clone().into()),
 				BuyExecution {
 					fees: assets,
-					weight_limit: Limited(2_000_000_000)
+					weight_limit: Limited(2_000_000_000.into())
 				},
 				Instruction::Transact {
-					origin_type: SovereignAccount,
-					require_weight_at_most: 1_000_000_000,
+					origin_kind: SovereignAccount,
+					require_weight_at_most: 1_000_000_000.into(),
 					call: call.encode().into(),
 				}
 			])))
@@ -1048,7 +1049,7 @@ fn send_as_sovereign() {
 		assert!(relay::System::events().iter().any(|r| {
 			matches!(
 				r.event,
-				relay::Event::System(frame_system::Event::<relay::Runtime>::Remarked { sender: _, hash: _ })
+				relay::RuntimeEvent::System(frame_system::Event::<relay::Runtime>::Remarked { sender: _, hash: _ })
 			)
 		}));
 	})
@@ -1063,24 +1064,23 @@ fn send_as_sovereign_fails_if_bad_origin() {
 	});
 
 	ParaA::execute_with(|| {
-		use xcm::latest::OriginKind::SovereignAccount;
-
-		let call =
-			relay::Call::System(frame_system::Call::<relay::Runtime>::remark_with_event { remark: vec![1, 1, 1] });
-		let assets: MultiAsset = (Here, 1_000_000_000_000).into();
+		let call = relay::RuntimeCall::System(frame_system::Call::<relay::Runtime>::remark_with_event {
+			remark: vec![1, 1, 1],
+		});
+		let assets: MultiAsset = (Here, 1_000_000_000_000u128).into();
 		assert_err!(
 			para::OrmlXcm::send_as_sovereign(
-				para::Origin::signed(ALICE),
+				para::RuntimeOrigin::signed(ALICE),
 				Box::new(Parent.into()),
 				Box::new(VersionedXcm::from(Xcm(vec![
 					WithdrawAsset(assets.clone().into()),
 					BuyExecution {
 						fees: assets,
-						weight_limit: Limited(10_000_000)
+						weight_limit: Limited(10_000_000.into())
 					},
 					Instruction::Transact {
-						origin_type: SovereignAccount,
-						require_weight_at_most: 1_000_000_000,
+						origin_kind: SovereignAccount,
+						require_weight_at_most: 1_000_000_000.into(),
 						call: call.encode().into(),
 					}
 				])))
@@ -1128,14 +1128,14 @@ fn send_with_zero_fee_should_yield_an_error() {
 						X2(
 							Parachain(2),
 							Junction::AccountId32 {
-								network: NetworkId::Any,
+								network: None,
 								id: BOB.into(),
 							}
 						)
 					)
 					.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::ZeroFee
 		);
@@ -1162,14 +1162,14 @@ fn send_with_insufficient_fee_traps_assets() {
 					X2(
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 	});
 
@@ -1178,7 +1178,7 @@ fn send_with_insufficient_fee_traps_assets() {
 		assert!(para::System::events().iter().any(|r| {
 			matches!(
 				r.event,
-				para::Event::PolkadotXcm(pallet_xcm::Event::<para::Runtime>::AssetsTrapped(_, _, _))
+				para::RuntimeEvent::PolkadotXcm(pallet_xcm::Event::<para::Runtime>::AssetsTrapped { .. })
 			)
 		}));
 	})
@@ -1205,14 +1205,14 @@ fn send_with_fee_should_handle_overflow() {
 						X2(
 							Parachain(2),
 							Junction::AccountId32 {
-								network: NetworkId::Any,
+								network: None,
 								id: BOB.into(),
 							}
 						)
 					)
 					.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::XcmExecutionFailed
 		);
@@ -1256,13 +1256,13 @@ fn specifying_more_than_assets_limit_should_error() {
 						Parent,
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::TooManyAssetsBeingSent
 		);
@@ -1297,13 +1297,13 @@ fn sending_non_fee_assets_with_different_reserve_should_fail() {
 						Parent,
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::DistinctReserveForAssetAndFee
 		);
@@ -1333,13 +1333,13 @@ fn specifying_a_non_existent_asset_index_should_fail() {
 						Parent,
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::AssetIndexNonExistent
 		);
@@ -1361,13 +1361,13 @@ fn send_with_zero_amount() {
 						Parent,
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::ZeroAmount
 		);
@@ -1382,13 +1382,13 @@ fn send_with_zero_amount() {
 						Parent,
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::ZeroAmount
 		);
@@ -1414,14 +1414,14 @@ fn send_self_parachain_asset_to_sibling_relative_parachain() {
 					X2(
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 
 		assert_eq!(ParaRelativeTokens::free_balance(CurrencyId::D, &ALICE), 500);
@@ -1460,13 +1460,13 @@ fn send_sibling_asset_to_reserve_sibling_with_relative_view() {
 					Parent,
 					Parachain(4),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: BOB.into(),
 					},
 				)
 					.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 
 		assert_eq!(ParaTokens::free_balance(CurrencyId::D, &ALICE), 500);
@@ -1488,13 +1488,13 @@ fn send_sibling_asset_to_reserve_sibling_with_relative_view() {
 					Parent,
 					Parachain(1),
 					Junction::AccountId32 {
-						network: NetworkId::Any,
+						network: None,
 						id: ALICE.into(),
 					},
 				)
 					.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaRelativeTokens::free_balance(CurrencyId::A, &BOB), 500);
 	});
@@ -1528,14 +1528,14 @@ fn send_relative_view_sibling_asset_to_non_reserve_sibling() {
 					X2(
 						Parachain(2),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaTokens::free_balance(CurrencyId::D, &ALICE), 500);
 	});
@@ -1576,14 +1576,14 @@ fn send_relay_chain_asset_to_relative_view_sibling() {
 					X2(
 						Parachain(4),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						}
 					)
 				)
 				.into()
 			),
-			40,
+			WeightLimit::Unlimited
 		));
 		assert_eq!(ParaTokens::free_balance(CurrencyId::R, &ALICE), 500);
 	});
@@ -1615,13 +1615,13 @@ fn unsupported_multilocation_should_be_filtered() {
 						Parent,
 						Parachain(5), // parachain 4 is not supported list.
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::NotSupportedMultiLocation
 		);
@@ -1636,15 +1636,88 @@ fn unsupported_multilocation_should_be_filtered() {
 						Parent,
 						Parachain(5),
 						Junction::AccountId32 {
-							network: NetworkId::Any,
+							network: None,
 							id: BOB.into(),
 						},
 					)
 						.into()
 				),
-				40,
+				WeightLimit::Unlimited
 			),
 			Error::<para::Runtime>::NotSupportedMultiLocation
 		);
+	});
+}
+
+#[test]
+fn send_with_sufficient_weight_limit() {
+	TestNet::reset();
+
+	ParaA::execute_with(|| {
+		assert_ok!(ParaTokens::deposit(CurrencyId::A, &ALICE, 1_000));
+
+		assert_ok!(ParaXTokens::transfer(
+			Some(ALICE).into(),
+			CurrencyId::A,
+			500,
+			Box::new(
+				MultiLocation::new(
+					1,
+					X2(
+						Parachain(2),
+						Junction::AccountId32 {
+							network: None,
+							id: BOB.into(),
+						}
+					)
+				)
+				.into()
+			),
+			WeightLimit::Limited(40.into()),
+		));
+
+		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &ALICE), 500);
+		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &sibling_b_account()), 500);
+	});
+
+	ParaB::execute_with(|| {
+		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &BOB), 460);
+	});
+}
+
+#[test]
+fn send_with_insufficient_weight_limit() {
+	TestNet::reset();
+
+	ParaA::execute_with(|| {
+		assert_ok!(ParaTokens::deposit(CurrencyId::A, &ALICE, 1_000));
+
+		assert_ok!(ParaXTokens::transfer(
+			Some(ALICE).into(),
+			CurrencyId::A,
+			500,
+			Box::new(
+				MultiLocation::new(
+					1,
+					X2(
+						Parachain(2),
+						Junction::AccountId32 {
+							network: None,
+							id: BOB.into(),
+						}
+					)
+				)
+				.into()
+			),
+			WeightLimit::Limited(1.into()),
+		));
+
+		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &ALICE), 500);
+		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &sibling_b_account()), 500);
+	});
+
+	ParaB::execute_with(|| {
+		// no funds should arrive - message will have failed
+		assert_eq!(ParaTokens::free_balance(CurrencyId::A, &BOB), 0);
 	});
 }

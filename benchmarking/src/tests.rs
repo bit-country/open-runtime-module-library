@@ -12,11 +12,12 @@ use frame_system::RawOrigin;
 use sp_runtime::{
 	testing::{Header, H256},
 	traits::{BlakeTwo256, IdentityLookup},
+	BuildStorage,
 };
 use sp_std::prelude::*;
 pub use test::*;
 
-#[frame_support::pallet]
+#[frame_support::pallet(dev_mode)]
 pub mod test {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
@@ -29,11 +30,11 @@ pub mod test {
 	pub(crate) type Value<T: Config> = StorageValue<_, u32, OptionQuery>;
 
 	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
+		#[pallet::call_index(0)]
 		#[pallet::weight(0)]
 		pub fn set_value(origin: OriginFor<T>, n: u32) -> DispatchResult {
 			let _sender = frame_system::ensure_signed(origin)?;
@@ -41,6 +42,7 @@ pub mod test {
 			Ok(())
 		}
 
+		#[pallet::call_index(1)]
 		#[pallet::weight(0)]
 		pub fn dummy(origin: OriginFor<T>, _n: u32) -> DispatchResult {
 			let _sender = frame_system::ensure_none(origin)?;
@@ -52,16 +54,15 @@ pub mod test {
 type AccountId = u128;
 
 impl frame_system::Config for Test {
-	type Origin = Origin;
-	type Index = u64;
-	type BlockNumber = u64;
+	type RuntimeOrigin = RuntimeOrigin;
+	type Nonce = u64;
 	type Hash = H256;
-	type Call = Call;
+	type RuntimeCall = RuntimeCall;
 	type Hashing = BlakeTwo256;
 	type AccountId = AccountId;
 	type Lookup = IdentityLookup<Self::AccountId>;
-	type Header = Header;
-	type Event = Event;
+	type Block = Block;
+	type RuntimeEvent = RuntimeEvent;
 	type BlockHashCount = ();
 	type DbWeight = ();
 	type BlockWeights = ();
@@ -81,24 +82,20 @@ impl frame_system::Config for Test {
 impl Config for Test {}
 
 pub type Block = sp_runtime::generic::Block<Header, UncheckedExtrinsic>;
-pub type UncheckedExtrinsic = sp_runtime::generic::UncheckedExtrinsic<u32, Call, u32, ()>;
+pub type UncheckedExtrinsic = sp_runtime::generic::UncheckedExtrinsic<u32, RuntimeCall, u32, ()>;
 
 construct_runtime!(
-	pub enum Test where
-		Block = Block,
-		NodeBlock = Block,
-		UncheckedExtrinsic = UncheckedExtrinsic,
-	{
-		System: frame_system::{Pallet, Call, Storage, Config, Event<T>},
-		Pallet: test::{Pallet, Call, Storage},
+	pub enum Test {
+		System: frame_system,
+		Pallet: test,
 	}
 );
 
 // This function basically just builds a genesis storage key/value store
 // according to our desired mockup.
 fn new_test_ext() -> sp_io::TestExternalities {
-	frame_system::GenesisConfig::default()
-		.build_storage::<Test>()
+	frame_system::GenesisConfig::<Test>::default()
+		.build_storage()
 		.unwrap()
 		.into()
 }

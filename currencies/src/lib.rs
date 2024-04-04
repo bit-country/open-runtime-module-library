@@ -118,7 +118,7 @@ pub mod module {
 	pub struct Pallet<T>(_);
 
 	#[pallet::hooks]
-	impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {}
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
@@ -126,6 +126,7 @@ pub mod module {
 		///
 		/// The dispatch origin for this call must be `Signed` by the
 		/// transactor.
+		#[pallet::call_index(0)]
 		#[pallet::weight(T::WeightInfo::transfer_non_native_currency())]
 		pub fn transfer(
 			origin: OriginFor<T>,
@@ -142,6 +143,7 @@ pub mod module {
 		///
 		/// The dispatch origin for this call must be `Signed` by the
 		/// transactor.
+		#[pallet::call_index(1)]
 		#[pallet::weight(T::WeightInfo::transfer_native_currency())]
 		pub fn transfer_native_currency(
 			origin: OriginFor<T>,
@@ -156,6 +158,7 @@ pub mod module {
 		/// update amount of account `who` under `currency_id`.
 		///
 		/// The dispatch origin of this call must be _Root_.
+		#[pallet::call_index(2)]
 		#[pallet::weight(T::WeightInfo::update_balance_non_native_currency())]
 		pub fn update_balance(
 			origin: OriginFor<T>,
@@ -282,7 +285,7 @@ impl<T: Config> MultiCurrencyExtended<T::AccountId> for Pallet<T> {
 }
 
 impl<T: Config> MultiLockableCurrency<T::AccountId> for Pallet<T> {
-	type Moment = T::BlockNumber;
+	type Moment = BlockNumberFor<T>;
 
 	fn set_lock(
 		lock_id: LockIdentifier,
@@ -512,7 +515,7 @@ where
 	T: Config,
 	GetCurrencyId: Get<CurrencyIdOf<T>>,
 {
-	type Moment = T::BlockNumber;
+	type Moment = BlockNumberFor<T>;
 
 	fn set_lock(lock_id: LockIdentifier, who: &T::AccountId, amount: Self::Balance) -> DispatchResult {
 		<Pallet<T> as MultiLockableCurrency<T::AccountId>>::set_lock(lock_id, GetCurrencyId::get(), who, amount)

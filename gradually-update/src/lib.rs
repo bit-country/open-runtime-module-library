@@ -31,7 +31,10 @@ use frame_support::{
 };
 use frame_system::pallet_prelude::*;
 use scale_info::TypeInfo;
-use sp_runtime::{traits::SaturatedConversion, DispatchResult, RuntimeDebug};
+use sp_runtime::{
+	traits::{SaturatedConversion, Saturating},
+	DispatchResult, RuntimeDebug,
+};
 
 mod default_weight;
 mod mock;
@@ -66,14 +69,14 @@ pub mod module {
 
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
-		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
 		/// The frequency of updating values between blocks
 		#[pallet::constant]
-		type UpdateFrequency: Get<Self::BlockNumber>;
+		type UpdateFrequency: Get<BlockNumberFor<Self>>;
 
 		/// The origin that can schedule an update
-		type DispatchOrigin: EnsureOrigin<Self::Origin>;
+		type DispatchOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
 		/// Weight information for extrinsics in this module.
 		type WeightInfo: WeightInfo;
@@ -119,7 +122,7 @@ pub mod module {
 		GraduallyUpdateCancelled { key: StorageKeyBytes<T> },
 		/// Gradually update applied.
 		Updated {
-			block_number: T::BlockNumber,
+			block_number: BlockNumberFor<T>,
 			key: StorageKeyBytes<T>,
 			target_value: StorageValueBytes<T>,
 		},
@@ -134,24 +137,24 @@ pub mod module {
 	/// The last updated block number
 	#[pallet::storage]
 	#[pallet::getter(fn last_updated_at)]
-	pub(crate) type LastUpdatedAt<T: Config> = StorageValue<_, T::BlockNumber, ValueQuery>;
+	pub(crate) type LastUpdatedAt<T: Config> = StorageValue<_, BlockNumberFor<T>, ValueQuery>;
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
 
 	#[pallet::hooks]
-	impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		/// `on_initialize` to return the weight used in `on_finalize`.
-		fn on_initialize(now: T::BlockNumber) -> Weight {
+		fn on_initialize(now: BlockNumberFor<T>) -> Weight {
 			if Self::_need_update(now) {
 				T::WeightInfo::on_finalize(GraduallyUpdates::<T>::get().len() as u32)
 			} else {
-				0
+				Weight::zero()
 			}
 		}
 
 		/// Update gradually_update to adjust numeric parameter.
-		fn on_finalize(now: T::BlockNumber) {
+		fn on_finalize(now: BlockNumberFor<T>) {
 			Self::_on_finalize(now);
 		}
 	}
@@ -159,6 +162,7 @@ pub mod module {
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
 		/// Add gradually_update to adjust numeric parameter.
+		#[pallet::call_index(0)]
 		#[pallet::weight(T::WeightInfo::gradually_update())]
 		pub fn gradually_update(origin: OriginFor<T>, update: GraduallyUpdateOf<T>) -> DispatchResult {
 			T::DispatchOrigin::try_origin(origin).map(|_| ()).or_else(ensure_root)?;
@@ -199,6 +203,7 @@ pub mod module {
 		}
 
 		/// Cancel gradually_update to adjust numeric parameter.
+		#[pallet::call_index(1)]
 		#[pallet::weight(T::WeightInfo::cancel_gradually_update())]
 		pub fn cancel_gradually_update(origin: OriginFor<T>, key: StorageKeyBytes<T>) -> DispatchResult {
 			T::DispatchOrigin::try_origin(origin).map(|_| ()).or_else(ensure_root)?;
@@ -219,11 +224,11 @@ pub mod module {
 }
 
 impl<T: Config> Pallet<T> {
-	fn _need_update(now: T::BlockNumber) -> bool {
-		now >= Self::last_updated_at() + T::UpdateFrequency::get()
+	fn _need_update(now: BlockNumberFor<T>) -> bool {
+		now >= Self::last_updated_at().saturating_add(T::UpdateFrequency::get())
 	}
 
-	fn _on_finalize(now: T::BlockNumber) {
+	fn _on_finalize(now: BlockNumberFor<T>) {
 		if !Self::_need_update(now) {
 			return;
 		}

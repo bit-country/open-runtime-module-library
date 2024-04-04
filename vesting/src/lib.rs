@@ -112,27 +112,27 @@ pub mod module {
 
 	pub(crate) type BalanceOf<T> =
 		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
-	pub(crate) type VestingScheduleOf<T> = VestingSchedule<<T as frame_system::Config>::BlockNumber, BalanceOf<T>>;
+	pub(crate) type VestingScheduleOf<T> = VestingSchedule<BlockNumberFor<T>, BalanceOf<T>>;
 	pub type ScheduledItem<T> = (
 		<T as frame_system::Config>::AccountId,
-		<T as frame_system::Config>::BlockNumber,
-		<T as frame_system::Config>::BlockNumber,
+		BlockNumberFor<T>,
+		BlockNumberFor<T>,
 		u32,
 		BalanceOf<T>,
 	);
 
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
-		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
-		type Currency: LockableCurrency<Self::AccountId, Moment = Self::BlockNumber>;
+		type Currency: LockableCurrency<Self::AccountId, Moment = BlockNumberFor<Self>>;
 
 		#[pallet::constant]
 		/// The minimum amount transferred to call `vested_transfer`.
 		type MinVestedTransfer: Get<BalanceOf<Self>>;
 
 		/// Required origin for vested transfer.
-		type VestedTransferOrigin: EnsureOrigin<Self::Origin, Success = Self::AccountId>;
+		type VestedTransferOrigin: EnsureOrigin<Self::RuntimeOrigin, Success = Self::AccountId>;
 
 		/// Weight information for extrinsics in this module.
 		type WeightInfo: WeightInfo;
@@ -141,7 +141,7 @@ pub mod module {
 		type MaxVestingSchedules: Get<u32>;
 
 		// The block number provider
-		type BlockNumberProvider: BlockNumberProvider<BlockNumber = Self::BlockNumber>;
+		type BlockNumberProvider: BlockNumberProvider<BlockNumber = BlockNumberFor<Self>>;
 	}
 
 	#[pallet::error]
@@ -193,15 +193,16 @@ pub mod module {
 		pub vesting: Vec<ScheduledItem<T>>,
 	}
 
-	#[cfg(feature = "std")]
 	impl<T: Config> Default for GenesisConfig<T> {
 		fn default() -> Self {
-			GenesisConfig { vesting: vec![] }
+			GenesisConfig {
+				vesting: Default::default(),
+			}
 		}
 	}
 
 	#[pallet::genesis_build]
-	impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
+	impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
 		fn build(&self) {
 			self.vesting
 				.iter()
@@ -219,7 +220,9 @@ pub mod module {
 						.iter()
 						.try_fold::<_, _, Result<BalanceOf<T>, DispatchError>>(Zero::zero(), |acc_amount, schedule| {
 							let amount = ensure_valid_vesting_schedule::<T>(schedule)?;
-							Ok(acc_amount + amount)
+							acc_amount
+								.checked_add(&amount)
+								.ok_or_else(|| ArithmeticError::Overflow.into())
 						})
 						.expect("Invalid vesting schedule");
 
@@ -238,11 +241,12 @@ pub mod module {
 	pub struct Pallet<T>(_);
 
 	#[pallet::hooks]
-	impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {}
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
-		#[pallet::weight(T::WeightInfo::claim((<T as Config>::MaxVestingSchedules::get() / 2) as u32))]
+		#[pallet::call_index(0)]
+		#[pallet::weight(T::WeightInfo::claim(<T as Config>::MaxVestingSchedules::get() / 2))]
 		pub fn claim(origin: OriginFor<T>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			let locked_amount = Self::do_claim(&who);
@@ -254,6 +258,7 @@ pub mod module {
 			Ok(())
 		}
 
+		#[pallet::call_index(1)]
 		#[pallet::weight(T::WeightInfo::vested_transfer())]
 		pub fn vested_transfer(
 			origin: OriginFor<T>,
@@ -262,6 +267,14 @@ pub mod module {
 		) -> DispatchResult {
 			let from = T::VestedTransferOrigin::ensure_origin(origin)?;
 			let to = T::Lookup::lookup(dest)?;
+
+			if to == from {
+				ensure!(
+					T::Currency::free_balance(&from) >= schedule.total_amount().ok_or(ArithmeticError::Overflow)?,
+					Error::<T>::InsufficientBalanceToLock,
+				);
+			}
+
 			Self::do_vested_transfer(&from, &to, schedule.clone())?;
 
 			Self::deposit_event(Event::VestingScheduleAdded {
@@ -272,6 +285,7 @@ pub mod module {
 			Ok(())
 		}
 
+		#[pallet::call_index(2)]
 		#[pallet::weight(T::WeightInfo::update_vesting_schedules(vesting_schedules.len() as u32))]
 		pub fn update_vesting_schedules(
 			origin: OriginFor<T>,
@@ -287,7 +301,8 @@ pub mod module {
 			Ok(())
 		}
 
-		#[pallet::weight(T::WeightInfo::claim((<T as Config>::MaxVestingSchedules::get() / 2) as u32))]
+		#[pallet::call_index(3)]
+		#[pallet::weight(T::WeightInfo::claim(<T as Config>::MaxVestingSchedules::get() / 2))]
 		pub fn claim_for(origin: OriginFor<T>, dest: <T::Lookup as StaticLookup>::Source) -> DispatchResult {
 			let _ = ensure_signed(origin)?;
 			let who = T::Lookup::lookup(dest)?;
@@ -366,7 +381,9 @@ impl<T: Config> Pallet<T> {
 			.iter()
 			.try_fold::<_, _, Result<BalanceOf<T>, DispatchError>>(Zero::zero(), |acc_amount, schedule| {
 				let amount = ensure_valid_vesting_schedule::<T>(schedule)?;
-				Ok(acc_amount + amount)
+				acc_amount
+					.checked_add(&amount)
+					.ok_or_else(|| ArithmeticError::Overflow.into())
 			})?;
 		ensure!(
 			T::Currency::free_balance(who) >= total_amount,

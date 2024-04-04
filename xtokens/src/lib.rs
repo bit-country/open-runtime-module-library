@@ -16,6 +16,14 @@
 //!
 //! - `transfer`: Transfer local assets with given `CurrencyId` and `Amount`.
 //! - `transfer_multiasset`: Transfer `MultiAsset` assets.
+//! - `transfer_with_fee`: Transfer native currencies specifying the fee and
+//!   amount as separate.
+//! - `transfer_multiasset_with_fee`: Transfer `MultiAsset` specifying the fee
+//!   and amount as separate.
+//! - `transfer_multicurrencies`: Transfer several currencies specifying the
+//!   item to be used as fee.
+//! - `transfer_multiassets`: Transfer several `MultiAsset` specifying the item
+//!   to be used as fee.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::from_over_into)]
@@ -25,25 +33,28 @@
 #![allow(clippy::too_many_arguments)]
 
 use frame_support::{
-	log,
 	pallet_prelude::*,
 	require_transactional,
 	traits::{Contains, Get},
-	transactional, Parameter,
+	Parameter,
 };
 use frame_system::{ensure_signed, pallet_prelude::*};
 use sp_runtime::{
-	traits::{AtLeast32BitUnsigned, Convert, MaybeSerializeDeserialize, Member, Zero},
+	traits::{AtLeast32BitUnsigned, Bounded, Convert, MaybeSerializeDeserialize, Member, Zero},
 	DispatchError,
 };
 use sp_std::{prelude::*, result::Result};
 
-use xcm::prelude::*;
-use xcm_executor::traits::{InvertLocation, WeightBounds};
+use xcm::{
+	v3::{prelude::*, Weight},
+	VersionedMultiAsset, VersionedMultiAssets, VersionedMultiLocation,
+};
+use xcm_executor::traits::WeightBounds;
 
 pub use module::*;
 use orml_traits::{
 	location::{Parse, Reserve},
+	xcm_transfer::{Transferred, XtokensWeightInfo},
 	GetByKey, XcmTransfer,
 };
 
@@ -66,7 +77,7 @@ pub mod module {
 
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
-		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
 		/// The balance type.
 		type Balance: Parameter
@@ -94,13 +105,13 @@ pub mod module {
 		type MinXcmFee: GetByKey<MultiLocation, Option<u128>>;
 
 		/// XCM executor.
-		type XcmExecutor: ExecuteXcm<Self::Call>;
+		type XcmExecutor: ExecuteXcm<Self::RuntimeCall>;
 
 		/// MultiLocation filter
 		type MultiLocationsFilter: Contains<MultiLocation>;
 
 		/// Means of measuring the weight consumed by an XCM message locally.
-		type Weigher: WeightBounds<Self::Call>;
+		type Weigher: WeightBounds<Self::RuntimeCall>;
 
 		/// Base XCM weight.
 		///
@@ -109,8 +120,8 @@ pub mod module {
 		#[pallet::constant]
 		type BaseXcmWeight: Get<Weight>;
 
-		/// Means of inverting a location.
-		type LocationInverter: InvertLocation;
+		/// This chain's Universal Location.
+		type UniversalLocation: Get<InteriorMultiLocation>;
 
 		/// The maximum number of distinct assets allowed to be transferred in a
 		/// single helper extrinsic.
@@ -145,7 +156,6 @@ pub mod module {
 		NotCrossChainTransferableCurrency,
 		/// The message's weight could not be determined.
 		UnweighableMessage,
-		// TODO: expand into XcmExecutionFailed(XcmError) after https://github.com/paritytech/substrate/pull/10242 done
 		/// XCM execution failed.
 		XcmExecutionFailed,
 		/// Could not re-anchor the assets to declare the fees for the
@@ -180,7 +190,7 @@ pub mod module {
 	}
 
 	#[pallet::hooks]
-	impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {}
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -189,9 +199,9 @@ pub mod module {
 	impl<T: Config> Pallet<T> {
 		/// Transfer native currencies.
 		///
-		/// `dest_weight` is the weight for XCM execution on the dest chain, and
-		/// it would be charged from the transferred assets. If set below
-		/// requirements, the execution may fail and assets wouldn't be
+		/// `dest_weight_limit` is the weight for XCM execution on the dest
+		/// chain, and it would be charged from the transferred assets. If set
+		/// below requirements, the execution may fail and assets wouldn't be
 		/// received.
 		///
 		/// It's a no-op if any error on local XCM execution or message sending.
@@ -199,25 +209,25 @@ pub mod module {
 		/// received. Receiving depends on if the XCM message could be delivered
 		/// by the network, and if the receiving chain would handle
 		/// messages correctly.
-		#[pallet::weight(Pallet::<T>::weight_of_transfer(currency_id.clone(), *amount, dest))]
-		#[transactional]
+		#[pallet::call_index(0)]
+		#[pallet::weight(XtokensWeight::<T>::weight_of_transfer(currency_id.clone(), *amount, dest))]
 		pub fn transfer(
 			origin: OriginFor<T>,
 			currency_id: T::CurrencyId,
 			amount: T::Balance,
 			dest: Box<VersionedMultiLocation>,
-			dest_weight: Weight,
+			dest_weight_limit: WeightLimit,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			let dest: MultiLocation = (*dest).try_into().map_err(|()| Error::<T>::BadVersion)?;
-			Self::do_transfer(who, currency_id, amount, dest, dest_weight)
+			Self::do_transfer(who, currency_id, amount, dest, dest_weight_limit).map(|_| ())
 		}
 
 		/// Transfer `MultiAsset`.
 		///
-		/// `dest_weight` is the weight for XCM execution on the dest chain, and
-		/// it would be charged from the transferred assets. If set below
-		/// requirements, the execution may fail and assets wouldn't be
+		/// `dest_weight_limit` is the weight for XCM execution on the dest
+		/// chain, and it would be charged from the transferred assets. If set
+		/// below requirements, the execution may fail and assets wouldn't be
 		/// received.
 		///
 		/// It's a no-op if any error on local XCM execution or message sending.
@@ -225,26 +235,26 @@ pub mod module {
 		/// received. Receiving depends on if the XCM message could be delivered
 		/// by the network, and if the receiving chain would handle
 		/// messages correctly.
-		#[pallet::weight(Pallet::<T>::weight_of_transfer_multiasset(asset, dest))]
-		#[transactional]
+		#[pallet::call_index(1)]
+		#[pallet::weight(XtokensWeight::<T>::weight_of_transfer_multiasset(asset, dest))]
 		pub fn transfer_multiasset(
 			origin: OriginFor<T>,
 			asset: Box<VersionedMultiAsset>,
 			dest: Box<VersionedMultiLocation>,
-			dest_weight: Weight,
+			dest_weight_limit: WeightLimit,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			let asset: MultiAsset = (*asset).try_into().map_err(|()| Error::<T>::BadVersion)?;
 			let dest: MultiLocation = (*dest).try_into().map_err(|()| Error::<T>::BadVersion)?;
-			Self::do_transfer_multiasset(who, asset, dest, dest_weight)
+			Self::do_transfer_multiasset(who, asset, dest, dest_weight_limit).map(|_| ())
 		}
 
 		/// Transfer native currencies specifying the fee and amount as
 		/// separate.
 		///
-		/// `dest_weight` is the weight for XCM execution on the dest chain, and
-		/// it would be charged from the transferred assets. If set below
-		/// requirements, the execution may fail and assets wouldn't be
+		/// `dest_weight_limit` is the weight for XCM execution on the dest
+		/// chain, and it would be charged from the transferred assets. If set
+		/// below requirements, the execution may fail and assets wouldn't be
 		/// received.
 		///
 		/// `fee` is the amount to be spent to pay for execution in destination
@@ -260,27 +270,27 @@ pub mod module {
 		/// received. Receiving depends on if the XCM message could be delivered
 		/// by the network, and if the receiving chain would handle
 		/// messages correctly.
-		#[pallet::weight(Pallet::<T>::weight_of_transfer(currency_id.clone(), *amount, dest))]
-		#[transactional]
+		#[pallet::call_index(2)]
+		#[pallet::weight(XtokensWeight::<T>::weight_of_transfer(currency_id.clone(), *amount, dest))]
 		pub fn transfer_with_fee(
 			origin: OriginFor<T>,
 			currency_id: T::CurrencyId,
 			amount: T::Balance,
 			fee: T::Balance,
 			dest: Box<VersionedMultiLocation>,
-			dest_weight: Weight,
+			dest_weight_limit: WeightLimit,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			let dest: MultiLocation = (*dest).try_into().map_err(|()| Error::<T>::BadVersion)?;
 
-			Self::do_transfer_with_fee(who, currency_id, amount, fee, dest, dest_weight)
+			Self::do_transfer_with_fee(who, currency_id, amount, fee, dest, dest_weight_limit).map(|_| ())
 		}
 
 		/// Transfer `MultiAsset` specifying the fee and amount as separate.
 		///
-		/// `dest_weight` is the weight for XCM execution on the dest chain, and
-		/// it would be charged from the transferred assets. If set below
-		/// requirements, the execution may fail and assets wouldn't be
+		/// `dest_weight_limit` is the weight for XCM execution on the dest
+		/// chain, and it would be charged from the transferred assets. If set
+		/// below requirements, the execution may fail and assets wouldn't be
 		/// received.
 		///
 		/// `fee` is the multiasset to be spent to pay for execution in
@@ -297,28 +307,28 @@ pub mod module {
 		/// received. Receiving depends on if the XCM message could be delivered
 		/// by the network, and if the receiving chain would handle
 		/// messages correctly.
-		#[pallet::weight(Pallet::<T>::weight_of_transfer_multiasset(asset, dest))]
-		#[transactional]
+		#[pallet::call_index(3)]
+		#[pallet::weight(XtokensWeight::<T>::weight_of_transfer_multiasset(asset, dest))]
 		pub fn transfer_multiasset_with_fee(
 			origin: OriginFor<T>,
 			asset: Box<VersionedMultiAsset>,
 			fee: Box<VersionedMultiAsset>,
 			dest: Box<VersionedMultiLocation>,
-			dest_weight: Weight,
+			dest_weight_limit: WeightLimit,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			let asset: MultiAsset = (*asset).try_into().map_err(|()| Error::<T>::BadVersion)?;
 			let fee: MultiAsset = (*fee).try_into().map_err(|()| Error::<T>::BadVersion)?;
 			let dest: MultiLocation = (*dest).try_into().map_err(|()| Error::<T>::BadVersion)?;
 
-			Self::do_transfer_multiasset_with_fee(who, asset, fee, dest, dest_weight)
+			Self::do_transfer_multiasset_with_fee(who, asset, fee, dest, dest_weight_limit).map(|_| ())
 		}
 
 		/// Transfer several currencies specifying the item to be used as fee
 		///
-		/// `dest_weight` is the weight for XCM execution on the dest chain, and
-		/// it would be charged from the transferred assets. If set below
-		/// requirements, the execution may fail and assets wouldn't be
+		/// `dest_weight_limit` is the weight for XCM execution on the dest
+		/// chain, and it would be charged from the transferred assets. If set
+		/// below requirements, the execution may fail and assets wouldn't be
 		/// received.
 		///
 		/// `fee_item` is index of the currencies tuple that we want to use for
@@ -329,26 +339,26 @@ pub mod module {
 		/// received. Receiving depends on if the XCM message could be delivered
 		/// by the network, and if the receiving chain would handle
 		/// messages correctly.
-		#[pallet::weight(Pallet::<T>::weight_of_transfer_multicurrencies(currencies, fee_item, dest))]
-		#[transactional]
+		#[pallet::call_index(4)]
+		#[pallet::weight(XtokensWeight::<T>::weight_of_transfer_multicurrencies(currencies, fee_item, dest))]
 		pub fn transfer_multicurrencies(
 			origin: OriginFor<T>,
 			currencies: Vec<(T::CurrencyId, T::Balance)>,
 			fee_item: u32,
 			dest: Box<VersionedMultiLocation>,
-			dest_weight: Weight,
+			dest_weight_limit: WeightLimit,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			let dest: MultiLocation = (*dest).try_into().map_err(|()| Error::<T>::BadVersion)?;
 
-			Self::do_transfer_multicurrencies(who, currencies, fee_item, dest, dest_weight)
+			Self::do_transfer_multicurrencies(who, currencies, fee_item, dest, dest_weight_limit).map(|_| ())
 		}
 
 		/// Transfer several `MultiAsset` specifying the item to be used as fee
 		///
-		/// `dest_weight` is the weight for XCM execution on the dest chain, and
-		/// it would be charged from the transferred assets. If set below
-		/// requirements, the execution may fail and assets wouldn't be
+		/// `dest_weight_limit` is the weight for XCM execution on the dest
+		/// chain, and it would be charged from the transferred assets. If set
+		/// below requirements, the execution may fail and assets wouldn't be
 		/// received.
 		///
 		/// `fee_item` is index of the MultiAssets that we want to use for
@@ -359,14 +369,14 @@ pub mod module {
 		/// received. Receiving depends on if the XCM message could be delivered
 		/// by the network, and if the receiving chain would handle
 		/// messages correctly.
-		#[pallet::weight(Pallet::<T>::weight_of_transfer_multiassets(assets, fee_item, dest))]
-		#[transactional]
+		#[pallet::call_index(5)]
+		#[pallet::weight(XtokensWeight::<T>::weight_of_transfer_multiassets(assets, fee_item, dest))]
 		pub fn transfer_multiassets(
 			origin: OriginFor<T>,
 			assets: Box<VersionedMultiAssets>,
 			fee_item: u32,
 			dest: Box<VersionedMultiLocation>,
-			dest_weight: Weight,
+			dest_weight_limit: WeightLimit,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			let assets: MultiAssets = (*assets).try_into().map_err(|()| Error::<T>::BadVersion)?;
@@ -375,7 +385,7 @@ pub mod module {
 			// We first grab the fee
 			let fee: &MultiAsset = assets.get(fee_item as usize).ok_or(Error::<T>::AssetIndexNonExistent)?;
 
-			Self::do_transfer_multiassets(who, assets.clone(), fee.clone(), dest, dest_weight)
+			Self::do_transfer_multiassets(who, assets.clone(), fee.clone(), dest, dest_weight_limit).map(|_| ())
 		}
 	}
 
@@ -385,8 +395,8 @@ pub mod module {
 			currency_id: T::CurrencyId,
 			amount: T::Balance,
 			dest: MultiLocation,
-			dest_weight: Weight,
-		) -> DispatchResult {
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
 			let location: MultiLocation =
 				T::CurrencyIdConvert::convert(currency_id).ok_or(Error::<T>::NotCrossChainTransferableCurrency)?;
 
@@ -397,7 +407,7 @@ pub mod module {
 			);
 
 			let asset: MultiAsset = (location, amount.into()).into();
-			Self::do_transfer_multiassets(who, vec![asset.clone()].into(), asset, dest, dest_weight)
+			Self::do_transfer_multiassets(who, vec![asset.clone()].into(), asset, dest, dest_weight_limit)
 		}
 
 		fn do_transfer_with_fee(
@@ -406,8 +416,8 @@ pub mod module {
 			amount: T::Balance,
 			fee: T::Balance,
 			dest: MultiLocation,
-			dest_weight: Weight,
-		) -> DispatchResult {
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
 			let location: MultiLocation =
 				T::CurrencyIdConvert::convert(currency_id).ok_or(Error::<T>::NotCrossChainTransferableCurrency)?;
 
@@ -418,7 +428,7 @@ pub mod module {
 				Error::<T>::NotSupportedMultiLocation
 			);
 
-			let asset = (location.clone(), amount.into()).into();
+			let asset = (location, amount.into()).into();
 			let fee_asset: MultiAsset = (location, fee.into()).into();
 
 			// Push contains saturated addition, so we should be able to use it safely
@@ -426,16 +436,16 @@ pub mod module {
 			assets.push(asset);
 			assets.push(fee_asset.clone());
 
-			Self::do_transfer_multiassets(who, assets, fee_asset, dest, dest_weight)
+			Self::do_transfer_multiassets(who, assets, fee_asset, dest, dest_weight_limit)
 		}
 
 		fn do_transfer_multiasset(
 			who: T::AccountId,
 			asset: MultiAsset,
 			dest: MultiLocation,
-			dest_weight: Weight,
-		) -> DispatchResult {
-			Self::do_transfer_multiassets(who, vec![asset.clone()].into(), asset, dest, dest_weight)
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
+			Self::do_transfer_multiassets(who, vec![asset.clone()].into(), asset, dest, dest_weight_limit)
 		}
 
 		fn do_transfer_multiasset_with_fee(
@@ -443,16 +453,14 @@ pub mod module {
 			asset: MultiAsset,
 			fee: MultiAsset,
 			dest: MultiLocation,
-			dest_weight: Weight,
-		) -> DispatchResult {
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
 			// Push contains saturated addition, so we should be able to use it safely
 			let mut assets = MultiAssets::new();
 			assets.push(asset);
 			assets.push(fee.clone());
 
-			Self::do_transfer_multiassets(who, assets, fee, dest, dest_weight)?;
-
-			Ok(())
+			Self::do_transfer_multiassets(who, assets, fee, dest, dest_weight_limit)
 		}
 
 		fn do_transfer_multicurrencies(
@@ -460,8 +468,8 @@ pub mod module {
 			currencies: Vec<(T::CurrencyId, T::Balance)>,
 			fee_item: u32,
 			dest: MultiLocation,
-			dest_weight: Weight,
-		) -> DispatchResult {
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
 			ensure!(
 				currencies.len() <= T::MaxAssetsForTransfer::get(),
 				Error::<T>::TooManyAssetsBeingSent
@@ -494,7 +502,7 @@ pub mod module {
 
 			let fee: MultiAsset = (fee_location, (*fee_amount).into()).into();
 
-			Self::do_transfer_multiassets(who, assets, fee, dest, dest_weight)
+			Self::do_transfer_multiassets(who, assets, fee, dest, dest_weight_limit)
 		}
 
 		fn do_transfer_multiassets(
@@ -502,8 +510,8 @@ pub mod module {
 			assets: MultiAssets,
 			fee: MultiAsset,
 			dest: MultiLocation,
-			dest_weight: Weight,
-		) -> DispatchResult {
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
 			ensure!(
 				assets.len() <= T::MaxAssetsForTransfer::get(),
 				Error::<T>::TooManyAssetsBeingSent
@@ -541,11 +549,11 @@ pub mod module {
 				// like `NonReserve` or `SelfReserve` with relay-chain fee is not support.
 				ensure!(non_fee_reserve == dest.chain_part(), Error::<T>::InvalidAsset);
 
-				let reserve_location = non_fee_reserve.clone().ok_or(Error::<T>::AssetHasNoReserve)?;
+				let reserve_location = non_fee_reserve.ok_or(Error::<T>::AssetHasNoReserve)?;
 				let min_xcm_fee = T::MinXcmFee::get(&reserve_location).ok_or(Error::<T>::MinXcmFeeNotDefined)?;
 
 				// min xcm fee should less than user fee
-				let fee_to_dest: MultiAsset = (fee.id.clone(), min_xcm_fee).into();
+				let fee_to_dest: MultiAsset = (fee.id, min_xcm_fee).into();
 				ensure!(fee_to_dest < fee, Error::<T>::FeeNotEnough);
 
 				let mut assets_to_dest = MultiAssets::new();
@@ -565,9 +573,9 @@ pub mod module {
 				let mut override_recipient = T::SelfLocation::get();
 				if override_recipient == MultiLocation::here() {
 					let dest_chain_part = dest.chain_part().ok_or(Error::<T>::InvalidDest)?;
-					let ancestry = T::LocationInverter::ancestry();
+					let ancestry = T::UniversalLocation::get();
 					let _ = override_recipient
-						.reanchor(&dest_chain_part, &ancestry)
+						.reanchor(&dest_chain_part, ancestry)
 						.map_err(|_| Error::<T>::CannotReanchor);
 				}
 
@@ -576,13 +584,13 @@ pub mod module {
 				// teleport. But as current there's only one case which is Parachain send back
 				// asset to Statemine/t, So we set `use_teleport` to always `true` in this case.
 				Self::execute_and_send_reserve_kind_xcm(
-					origin_location.clone(),
+					origin_location,
 					assets_to_fee_reserve,
 					asset_to_fee_reserve,
 					fee_reserve,
 					&dest,
 					Some(override_recipient),
-					dest_weight,
+					dest_weight_limit.clone(),
 					true,
 				)?;
 
@@ -594,7 +602,7 @@ pub mod module {
 					non_fee_reserve,
 					&dest,
 					None,
-					dest_weight,
+					dest_weight_limit,
 					false,
 				)?;
 			} else {
@@ -605,19 +613,24 @@ pub mod module {
 					non_fee_reserve,
 					&dest,
 					None,
-					dest_weight,
+					dest_weight_limit,
 					false,
 				)?;
 			}
 
 			Self::deposit_event(Event::<T>::TransferredMultiAssets {
+				sender: who.clone(),
+				assets: assets.clone(),
+				fee: fee.clone(),
+				dest,
+			});
+
+			Ok(Transferred {
 				sender: who,
 				assets,
 				fee,
 				dest,
-			});
-
-			Ok(())
+			})
 		}
 
 		/// Execute and send xcm with given assets and fee to dest chain or
@@ -629,7 +642,7 @@ pub mod module {
 			reserve: Option<MultiLocation>,
 			dest: &MultiLocation,
 			maybe_recipient_override: Option<MultiLocation>,
-			dest_weight: Weight,
+			dest_weight_limit: WeightLimit,
 			use_teleport: bool,
 		) -> DispatchResult {
 			let (transfer_kind, dest, reserve, recipient) = Self::transfer_kind(reserve, dest)?;
@@ -637,17 +650,23 @@ pub mod module {
 				Some(recipient) => recipient,
 				None => recipient,
 			};
-
 			let mut msg = match transfer_kind {
-				SelfReserveAsset => Self::transfer_self_reserve_asset(assets, fee, dest, recipient, dest_weight)?,
-				ToReserve => Self::transfer_to_reserve(assets, fee, dest, recipient, dest_weight)?,
-				ToNonReserve => {
-					Self::transfer_to_non_reserve(assets, fee, reserve, dest, recipient, dest_weight, use_teleport)?
-				}
+				SelfReserveAsset => Self::transfer_self_reserve_asset(assets, fee, dest, recipient, dest_weight_limit)?,
+				ToReserve => Self::transfer_to_reserve(assets, fee, dest, recipient, dest_weight_limit)?,
+				ToNonReserve => Self::transfer_to_non_reserve(
+					assets,
+					fee,
+					reserve,
+					dest,
+					recipient,
+					dest_weight_limit,
+					use_teleport,
+				)?,
 			};
+			let hash = msg.using_encoded(sp_io::hashing::blake2_256);
 
 			let weight = T::Weigher::weight(&mut msg).map_err(|()| Error::<T>::UnweighableMessage)?;
-			T::XcmExecutor::execute_xcm_in_credit(origin_location, msg, weight, weight)
+			T::XcmExecutor::execute_xcm_in_credit(origin_location, msg, hash, weight, weight)
 				.ensure_complete()
 				.map_err(|error| {
 					log::error!("Failed execute transfer message with {:?}", error);
@@ -662,13 +681,13 @@ pub mod module {
 			fee: MultiAsset,
 			dest: MultiLocation,
 			recipient: MultiLocation,
-			dest_weight: Weight,
-		) -> Result<Xcm<T::Call>, DispatchError> {
+			dest_weight_limit: WeightLimit,
+		) -> Result<Xcm<T::RuntimeCall>, DispatchError> {
 			Ok(Xcm(vec![TransferReserveAsset {
 				assets: assets.clone(),
-				dest: dest.clone(),
+				dest,
 				xcm: Xcm(vec![
-					Self::buy_execution(fee, &dest, dest_weight)?,
+					Self::buy_execution(fee, &dest, dest_weight_limit)?,
 					Self::deposit_asset(recipient, assets.len() as u32),
 				]),
 			}]))
@@ -679,15 +698,15 @@ pub mod module {
 			fee: MultiAsset,
 			reserve: MultiLocation,
 			recipient: MultiLocation,
-			dest_weight: Weight,
-		) -> Result<Xcm<T::Call>, DispatchError> {
+			dest_weight_limit: WeightLimit,
+		) -> Result<Xcm<T::RuntimeCall>, DispatchError> {
 			Ok(Xcm(vec![
 				WithdrawAsset(assets.clone()),
 				InitiateReserveWithdraw {
 					assets: All.into(),
-					reserve: reserve.clone(),
+					reserve,
 					xcm: Xcm(vec![
-						Self::buy_execution(fee, &reserve, dest_weight)?,
+						Self::buy_execution(fee, &reserve, dest_weight_limit)?,
 						Self::deposit_asset(recipient, assets.len() as u32),
 					]),
 				},
@@ -700,37 +719,35 @@ pub mod module {
 			reserve: MultiLocation,
 			dest: MultiLocation,
 			recipient: MultiLocation,
-			dest_weight: Weight,
+			dest_weight_limit: WeightLimit,
 			use_teleport: bool,
-		) -> Result<Xcm<T::Call>, DispatchError> {
-			let mut reanchored_dest = dest.clone();
+		) -> Result<Xcm<T::RuntimeCall>, DispatchError> {
+			let mut reanchored_dest = dest;
 			if reserve == MultiLocation::parent() {
-				match dest {
-					MultiLocation {
-						parents,
-						interior: X1(Parachain(id)),
-					} if parents == 1 => {
-						reanchored_dest = Parachain(id).into();
-					}
-					_ => {}
+				if let MultiLocation {
+					parents: 1,
+					interior: X1(Parachain(id)),
+				} = dest
+				{
+					reanchored_dest = Parachain(id).into();
 				}
 			}
 
+			let max_assets = assets.len() as u32;
 			if !use_teleport {
 				Ok(Xcm(vec![
-					WithdrawAsset(assets.clone()),
+					WithdrawAsset(assets),
 					InitiateReserveWithdraw {
 						assets: All.into(),
-						reserve: reserve.clone(),
+						reserve,
 						xcm: Xcm(vec![
-							Self::buy_execution(half(&fee), &reserve, dest_weight)?,
+							Self::buy_execution(half(&fee), &reserve, dest_weight_limit.clone())?,
 							DepositReserveAsset {
-								assets: All.into(),
-								max_assets: assets.len() as u32,
+								assets: AllCounted(max_assets).into(),
 								dest: reanchored_dest,
 								xcm: Xcm(vec![
-									Self::buy_execution(half(&fee), &dest, dest_weight)?,
-									Self::deposit_asset(recipient, assets.len() as u32),
+									Self::buy_execution(half(&fee), &dest, dest_weight_limit)?,
+									Self::deposit_asset(recipient, max_assets),
 								]),
 							},
 						]),
@@ -738,18 +755,18 @@ pub mod module {
 				]))
 			} else {
 				Ok(Xcm(vec![
-					WithdrawAsset(assets.clone()),
+					WithdrawAsset(assets),
 					InitiateReserveWithdraw {
 						assets: All.into(),
-						reserve: reserve.clone(),
+						reserve,
 						xcm: Xcm(vec![
-							Self::buy_execution(half(&fee), &reserve, dest_weight)?,
+							Self::buy_execution(half(&fee), &reserve, dest_weight_limit.clone())?,
 							InitiateTeleport {
 								assets: All.into(),
 								dest: reanchored_dest,
 								xcm: Xcm(vec![
-									Self::buy_execution(half(&fee), &dest, dest_weight)?,
-									Self::deposit_asset(recipient, assets.len() as u32),
+									Self::buy_execution(half(&fee), &dest, dest_weight_limit)?,
+									Self::deposit_asset(recipient, max_assets),
 								]),
 							},
 						]),
@@ -760,8 +777,7 @@ pub mod module {
 
 		fn deposit_asset(recipient: MultiLocation, max_assets: u32) -> Instruction<()> {
 			DepositAsset {
-				assets: All.into(),
-				max_assets,
+				assets: AllCounted(max_assets).into(),
 				beneficiary: recipient,
 			}
 		}
@@ -769,16 +785,12 @@ pub mod module {
 		fn buy_execution(
 			asset: MultiAsset,
 			at: &MultiLocation,
-			weight: Weight,
+			weight_limit: WeightLimit,
 		) -> Result<Instruction<()>, DispatchError> {
-			let ancestry = T::LocationInverter::ancestry();
-			let fees = asset
-				.reanchored(at, &ancestry)
-				.map_err(|_| Error::<T>::CannotReanchor)?;
-			Ok(BuyExecution {
-				fees,
-				weight_limit: WeightLimit::Limited(weight),
-			})
+			let ancestry = T::UniversalLocation::get();
+			let fees = asset.reanchored(at, ancestry).map_err(|_| Error::<T>::CannotReanchor)?;
+
+			Ok(BuyExecution { fees, weight_limit })
 		}
 
 		/// Ensure has the `dest` has chain part and recipient part.
@@ -816,21 +828,35 @@ pub mod module {
 			};
 			Ok((transfer_kind, dest, reserve, recipient))
 		}
+
+		/// Get reserve location by `assets` and `fee_item`. the `assets`
+		/// includes fee asset and non fee asset. make sure assets have ge one
+		/// asset. all non fee asset should share same reserve location.
+		fn get_reserve_location(assets: &MultiAssets, fee_item: &u32) -> Option<MultiLocation> {
+			let reserve_idx = if assets.len() == 1 {
+				0
+			} else {
+				(*fee_item == 0) as usize
+			};
+			let asset = assets.get(reserve_idx);
+			asset.and_then(T::ReserveProvider::reserve)
+		}
 	}
 
+	pub struct XtokensWeight<T>(PhantomData<T>);
 	// weights
-	impl<T: Config> Pallet<T> {
+	impl<T: Config> XtokensWeightInfo<T::AccountId, T::Balance, T::CurrencyId> for XtokensWeight<T> {
 		/// Returns weight of `transfer_multiasset` call.
 		fn weight_of_transfer_multiasset(asset: &VersionedMultiAsset, dest: &VersionedMultiLocation) -> Weight {
 			let asset: Result<MultiAsset, _> = asset.clone().try_into();
 			let dest = dest.clone().try_into();
 			if let (Ok(asset), Ok(dest)) = (asset, dest) {
 				if let Ok((transfer_kind, dest, _, reserve)) =
-					Self::transfer_kind(T::ReserveProvider::reserve(&asset), &dest)
+					Pallet::<T>::transfer_kind(T::ReserveProvider::reserve(&asset), &dest)
 				{
 					let mut msg = match transfer_kind {
 						SelfReserveAsset => Xcm(vec![TransferReserveAsset {
-							assets: vec![].into(),
+							assets: vec![asset].into(),
 							dest,
 							xcm: Xcm(vec![]),
 						}]),
@@ -848,7 +874,7 @@ pub mod module {
 						.map_or(Weight::max_value(), |w| T::BaseXcmWeight::get().saturating_add(w));
 				}
 			}
-			0
+			Weight::zero()
 		}
 
 		/// Returns weight of `transfer` call.
@@ -857,7 +883,7 @@ pub mod module {
 				let asset = (location, amount.into()).into();
 				Self::weight_of_transfer_multiasset(&asset, dest)
 			} else {
-				0
+				Weight::zero()
 			}
 		}
 
@@ -870,10 +896,10 @@ pub mod module {
 			let mut assets: Vec<MultiAsset> = Vec::new();
 			for (currency_id, amount) in currencies {
 				if let Some(location) = T::CurrencyIdConvert::convert(currency_id.clone()) {
-					let asset: MultiAsset = (location.clone(), (*amount).into()).into();
+					let asset: MultiAsset = (location, (*amount).into()).into();
 					assets.push(asset);
 				} else {
-					return 0;
+					return Weight::zero();
 				}
 			}
 
@@ -889,8 +915,8 @@ pub mod module {
 			let assets: Result<MultiAssets, ()> = assets.clone().try_into();
 			let dest = dest.clone().try_into();
 			if let (Ok(assets), Ok(dest)) = (assets, dest) {
-				let reserve_location = Self::get_reserve_location(&assets, fee_item);
-				if let Ok((transfer_kind, dest, _, reserve)) = Self::transfer_kind(reserve_location, &dest) {
+				let reserve_location = Pallet::<T>::get_reserve_location(&assets, fee_item);
+				if let Ok((transfer_kind, dest, _, reserve)) = Pallet::<T>::transfer_kind(reserve_location, &dest) {
 					let mut msg = match transfer_kind {
 						SelfReserveAsset => Xcm(vec![TransferReserveAsset {
 							assets,
@@ -911,22 +937,7 @@ pub mod module {
 						.map_or(Weight::max_value(), |w| T::BaseXcmWeight::get().saturating_add(w));
 				}
 			}
-			0
-		}
-
-		/// Get reserve location by `assets` and `fee_item`. the `assets`
-		/// includes fee asset and non fee asset. make sure assets have ge one
-		/// asset. all non fee asset should share same reserve location.
-		fn get_reserve_location(assets: &MultiAssets, fee_item: &u32) -> Option<MultiLocation> {
-			let reserve_idx = if assets.len() == 1 {
-				0
-			} else if *fee_item == 0 {
-				1
-			} else {
-				0
-			};
-			let asset = assets.get(reserve_idx);
-			asset.and_then(T::ReserveProvider::reserve)
+			Weight::zero()
 		}
 	}
 
@@ -937,19 +948,64 @@ pub mod module {
 			currency_id: T::CurrencyId,
 			amount: T::Balance,
 			dest: MultiLocation,
-			dest_weight: Weight,
-		) -> DispatchResult {
-			Self::do_transfer(who, currency_id, amount, dest, dest_weight)
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
+			Self::do_transfer(who, currency_id, amount, dest, dest_weight_limit)
 		}
 
 		#[require_transactional]
-		fn transfer_multi_asset(
+		fn transfer_multiasset(
 			who: T::AccountId,
 			asset: MultiAsset,
 			dest: MultiLocation,
-			dest_weight: Weight,
-		) -> DispatchResult {
-			Self::do_transfer_multiasset(who, asset, dest, dest_weight)
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
+			Self::do_transfer_multiasset(who, asset, dest, dest_weight_limit)
+		}
+
+		#[require_transactional]
+		fn transfer_with_fee(
+			who: T::AccountId,
+			currency_id: T::CurrencyId,
+			amount: T::Balance,
+			fee: T::Balance,
+			dest: MultiLocation,
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
+			Self::do_transfer_with_fee(who, currency_id, amount, fee, dest, dest_weight_limit)
+		}
+
+		#[require_transactional]
+		fn transfer_multiasset_with_fee(
+			who: T::AccountId,
+			asset: MultiAsset,
+			fee: MultiAsset,
+			dest: MultiLocation,
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
+			Self::do_transfer_multiasset_with_fee(who, asset, fee, dest, dest_weight_limit)
+		}
+
+		#[require_transactional]
+		fn transfer_multicurrencies(
+			who: T::AccountId,
+			currencies: Vec<(T::CurrencyId, T::Balance)>,
+			fee_item: u32,
+			dest: MultiLocation,
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
+			Self::do_transfer_multicurrencies(who, currencies, fee_item, dest, dest_weight_limit)
+		}
+
+		#[require_transactional]
+		fn transfer_multiassets(
+			who: T::AccountId,
+			assets: MultiAssets,
+			fee: MultiAsset,
+			dest: MultiLocation,
+			dest_weight_limit: WeightLimit,
+		) -> Result<Transferred<T::AccountId>, DispatchError> {
+			Self::do_transfer_multiassets(who, assets, fee, dest, dest_weight_limit)
 		}
 	}
 }
@@ -969,7 +1025,7 @@ fn half(asset: &MultiAsset) -> MultiAsset {
 		.expect("div 2 can't overflow; qed");
 	MultiAsset {
 		fun: Fungible(half_amount),
-		id: asset.id.clone(),
+		id: asset.id,
 	}
 }
 
@@ -977,6 +1033,6 @@ fn subtract_fee(asset: &MultiAsset, amount: u128) -> MultiAsset {
 	let final_amount = fungible_amount(asset).checked_sub(amount).expect("fee too low; qed");
 	MultiAsset {
 		fun: Fungible(final_amount),
-		id: asset.id.clone(),
+		id: asset.id,
 	}
 }

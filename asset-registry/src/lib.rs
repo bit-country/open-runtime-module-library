@@ -14,7 +14,7 @@ use sp_runtime::{
 	DispatchResult,
 };
 use sp_std::prelude::*;
-use xcm::{v2::prelude::*, VersionedMultiLocation};
+use xcm::{v3::prelude::*, VersionedMultiLocation};
 
 pub use impls::*;
 pub use module::*;
@@ -28,29 +28,39 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
+mod migrations;
+pub use migrations::Migration;
+
 #[frame_support::pallet]
 pub mod module {
 	use super::*;
 
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
-		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
 		/// Additional non-standard metadata to store for each asset
-		type CustomMetadata: Parameter + Member + TypeInfo;
+		type CustomMetadata: Parameter + Member + TypeInfo + MaxEncodedLen;
 
 		/// The type used as a unique asset id,
-		type AssetId: Parameter + Member + Default + TypeInfo;
+		type AssetId: Parameter + Member + Default + TypeInfo + MaybeSerializeDeserialize + MaxEncodedLen;
 
 		/// Checks that an origin has the authority to register/update an asset
-		type AuthorityOrigin: EnsureOriginWithArg<Self::Origin, Option<Self::AssetId>>;
+		type AuthorityOrigin: EnsureOriginWithArg<Self::RuntimeOrigin, Option<Self::AssetId>>;
 
 		/// A filter ran upon metadata registration that assigns an is and
 		/// potentially modifies the supplied metadata.
-		type AssetProcessor: AssetProcessor<Self::AssetId, AssetMetadata<Self::Balance, Self::CustomMetadata>>;
+		type AssetProcessor: AssetProcessor<
+			Self::AssetId,
+			AssetMetadata<Self::Balance, Self::CustomMetadata, Self::StringLimit>,
+		>;
 
 		/// The balance type.
-		type Balance: Parameter + Member + AtLeast32BitUnsigned + Default + Copy;
+		type Balance: Parameter + Member + AtLeast32BitUnsigned + Default + Copy + MaxEncodedLen;
+
+		/// The maximum length of a name or symbol.
+		#[pallet::constant]
+		type StringLimit: Get<u32>;
 
 		/// Weight information for extrinsics in this module.
 		type WeightInfo: WeightInfo;
@@ -69,6 +79,8 @@ pub mod module {
 		ConflictingLocation,
 		/// Another asset was already register with this asset id.
 		ConflictingAssetId,
+		/// Name or symbol is too long.
+		InvalidAssetString,
 	}
 
 	#[pallet::event]
@@ -76,19 +88,24 @@ pub mod module {
 	pub enum Event<T: Config> {
 		RegisteredAsset {
 			asset_id: T::AssetId,
-			metadata: AssetMetadata<T::Balance, T::CustomMetadata>,
+			metadata: AssetMetadata<T::Balance, T::CustomMetadata, T::StringLimit>,
 		},
 		UpdatedAsset {
 			asset_id: T::AssetId,
-			metadata: AssetMetadata<T::Balance, T::CustomMetadata>,
+			metadata: AssetMetadata<T::Balance, T::CustomMetadata, T::StringLimit>,
 		},
 	}
 
 	/// The metadata of an asset, indexed by asset id.
 	#[pallet::storage]
 	#[pallet::getter(fn metadata)]
-	pub type Metadata<T: Config> =
-		StorageMap<_, Twox64Concat, T::AssetId, AssetMetadata<T::Balance, T::CustomMetadata>, OptionQuery>;
+	pub type Metadata<T: Config> = StorageMap<
+		_,
+		Twox64Concat,
+		T::AssetId,
+		AssetMetadata<T::Balance, T::CustomMetadata, T::StringLimit>,
+		OptionQuery,
+	>;
 
 	/// Maps a multilocation to an asset id - useful when processing xcm
 	/// messages.
@@ -103,37 +120,45 @@ pub mod module {
 
 	#[pallet::genesis_config]
 	pub struct GenesisConfig<T: Config> {
-		_phantom: PhantomData<T>,
+		pub assets: Vec<(T::AssetId, Vec<u8>)>,
+		pub last_asset_id: T::AssetId,
 	}
 
-	#[cfg(feature = "std")]
 	impl<T: Config> Default for GenesisConfig<T> {
 		fn default() -> Self {
 			Self {
-				_phantom: Default::default(),
+				assets: vec![],
+				last_asset_id: Default::default(),
 			}
 		}
 	}
 
 	#[pallet::genesis_build]
-	impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
-		fn build(&self) {}
+	impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+		fn build(&self) {
+			self.assets.iter().for_each(|(asset_id, metadata_encoded)| {
+				let metadata = AssetMetadata::decode(&mut &metadata_encoded[..]).expect("Error decoding AssetMetadata");
+				Pallet::<T>::do_register_asset_without_asset_processor(metadata, asset_id.clone())
+					.expect("Error registering Asset");
+			});
+
+			LastAssetId::<T>::set(self.last_asset_id.clone());
+		}
 	}
 
-	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
-	#[pallet::without_storage_info]
-	pub struct Pallet<T>(_);
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
 
-	#[pallet::hooks]
-	impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {}
+	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
+	pub struct Pallet<T>(_);
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
+		#[pallet::call_index(0)]
 		#[pallet::weight(T::WeightInfo::register_asset())]
 		pub fn register_asset(
 			origin: OriginFor<T>,
-			metadata: AssetMetadata<T::Balance, T::CustomMetadata>,
+			metadata: AssetMetadata<T::Balance, T::CustomMetadata, T::StringLimit>,
 			asset_id: Option<T::AssetId>,
 		) -> DispatchResult {
 			T::AuthorityOrigin::ensure_origin(origin, &asset_id)?;
@@ -141,13 +166,14 @@ pub mod module {
 			Self::do_register_asset(metadata, asset_id)
 		}
 
+		#[pallet::call_index(1)]
 		#[pallet::weight(T::WeightInfo::update_asset())]
 		pub fn update_asset(
 			origin: OriginFor<T>,
 			asset_id: T::AssetId,
 			decimals: Option<u32>,
-			name: Option<Vec<u8>>,
-			symbol: Option<Vec<u8>>,
+			name: Option<BoundedVec<u8, T::StringLimit>>,
+			symbol: Option<BoundedVec<u8, T::StringLimit>>,
 			existential_deposit: Option<T::Balance>,
 			location: Option<Option<VersionedMultiLocation>>,
 			additional: Option<T::CustomMetadata>,
@@ -172,7 +198,7 @@ pub mod module {
 impl<T: Config> Pallet<T> {
 	/// Register a new asset
 	pub fn do_register_asset(
-		metadata: AssetMetadata<T::Balance, T::CustomMetadata>,
+		metadata: AssetMetadata<T::Balance, T::CustomMetadata, T::StringLimit>,
 		asset_id: Option<T::AssetId>,
 	) -> DispatchResult {
 		let (asset_id, metadata) = T::AssetProcessor::pre_register(asset_id, metadata)?;
@@ -189,7 +215,7 @@ impl<T: Config> Pallet<T> {
 	/// This function is useful in tests but it might also come in useful to
 	/// users.
 	pub fn do_register_asset_without_asset_processor(
-		metadata: AssetMetadata<T::Balance, T::CustomMetadata>,
+		metadata: AssetMetadata<T::Balance, T::CustomMetadata, T::StringLimit>,
 		asset_id: T::AssetId,
 	) -> DispatchResult {
 		Metadata::<T>::try_mutate(&asset_id, |maybe_metadata| -> DispatchResult {
@@ -213,8 +239,8 @@ impl<T: Config> Pallet<T> {
 	pub fn do_update_asset(
 		asset_id: T::AssetId,
 		decimals: Option<u32>,
-		name: Option<Vec<u8>>,
-		symbol: Option<Vec<u8>>,
+		name: Option<BoundedVec<u8, T::StringLimit>>,
+		symbol: Option<BoundedVec<u8, T::StringLimit>>,
 		existential_deposit: Option<T::Balance>,
 		location: Option<Option<VersionedMultiLocation>>,
 		additional: Option<T::CustomMetadata>,
@@ -259,7 +285,7 @@ impl<T: Config> Pallet<T> {
 
 	pub fn fetch_metadata_by_location(
 		location: &MultiLocation,
-	) -> Option<AssetMetadata<T::Balance, T::CustomMetadata>> {
+	) -> Option<AssetMetadata<T::Balance, T::CustomMetadata, T::StringLimit>> {
 		let asset_id = LocationToAssetId::<T>::get(location)?;
 		Metadata::<T>::get(asset_id)
 	}
@@ -301,7 +327,7 @@ impl<T: Config> Pallet<T> {
 	fn do_insert_location(asset_id: T::AssetId, location: VersionedMultiLocation) -> DispatchResult {
 		// if the metadata contains a location, set the LocationToAssetId
 		let location: MultiLocation = location.try_into().map_err(|()| Error::<T>::BadVersion)?;
-		LocationToAssetId::<T>::try_mutate(&location, |maybe_asset_id| {
+		LocationToAssetId::<T>::try_mutate(location, |maybe_asset_id| {
 			ensure!(maybe_asset_id.is_none(), Error::<T>::ConflictingLocation);
 			*maybe_asset_id = Some(asset_id);
 			Ok(())
